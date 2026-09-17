@@ -29,7 +29,8 @@
       body {
         margin: 0;
         overflow: hidden;
-        background-color: #0b0f19;
+        background-color: #060913;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       }
     </style>
   </head>
@@ -39,7 +40,7 @@ import * as THREE from 'three';
 import * as xb from 'xrblocks';
 
 /**
- * Procedural Web Audio synthesizer for crisp punch hits, swooshes, and obstacle alerts.
+ * Procedural Web Audio synthesizer for punch impacts, combo chimes, and dodge cues.
  */
 class SoundFX {
   constructor() {
@@ -48,9 +49,9 @@ class SoundFX {
 
   init() {
     if (!this.ctx) {
-      const AudioContext = window.AudioContext || window.webkitAudioContext;
-      if (AudioContext) {
-        this.ctx = new AudioContext();
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        this.ctx = new AudioCtx();
       }
     }
     if (this.ctx && this.ctx.state === 'suspended') {
@@ -58,7 +59,7 @@ class SoundFX {
     }
   }
 
-  playPunch(pitch = 220) {
+  playPunch(pitch = 240) {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     const osc = this.ctx.createOscillator();
@@ -66,173 +67,327 @@ class SoundFX {
 
     osc.type = 'triangle';
     osc.frequency.setValueAtTime(pitch, t);
-    osc.frequency.exponentialRampToValueAtTime(45, t + 0.18);
+    osc.frequency.exponentialRampToValueAtTime(38, t + 0.16);
 
-    gain.gain.setValueAtTime(0.4, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
-
-    osc.connect(gain);
-    gain.connect(this.ctx.destination);
-    osc.start(t);
-    osc.stop(t + 0.2);
-  }
-
-  playObstacleHit() {
-    if (!this.ctx) return;
-    const t = this.ctx.currentTime;
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
-
-    osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(110, t);
-    osc.frequency.linearRampToValueAtTime(40, t + 0.35);
-
-    gain.gain.setValueAtTime(0.5, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+    gain.gain.setValueAtTime(0.55, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
 
     osc.connect(gain);
     gain.connect(this.ctx.destination);
     osc.start(t);
-    osc.stop(t + 0.35);
+    osc.stop(t + 0.18);
   }
 
-  playScoreChime() {
+  playWhoosh() {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
 
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(587.33, t); // D5
-    osc.frequency.setValueAtTime(880.0, t + 0.08); // A5
+    osc.frequency.setValueAtTime(140, t);
+    osc.frequency.exponentialRampToValueAtTime(320, t + 0.12);
 
-    gain.gain.setValueAtTime(0.25, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+    gain.gain.setValueAtTime(0.2, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
 
     osc.connect(gain);
     gain.connect(this.ctx.destination);
     osc.start(t);
-    osc.stop(t + 0.3);
+    osc.stop(t + 0.14);
+  }
+
+  playHazardHit() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(130, t);
+    osc.frequency.linearRampToValueAtTime(35, t + 0.4);
+
+    gain.gain.setValueAtTime(0.6, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.4);
+  }
+
+  playScoreChime(multiplier = 1) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const baseFreq = 523.25 * (1 + Math.min(1.2, multiplier * 0.12));
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(baseFreq, t);
+    osc.frequency.setValueAtTime(baseFreq * 1.5, t + 0.08);
+
+    gain.gain.setValueAtTime(0.3, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.28);
   }
 }
 
-/**
- * Main Spatial Puncher Script
- */
 class SpatialPuncherApp extends xb.Script {
   constructor() {
     super();
     this.sound = new SoundFX();
 
-    // Game states
+    // Game state
     this.gameState = 'READY'; // READY, PLAYING, GAMEOVER
     this.score = 0;
+    this.highScore = 0;
     this.combo = 0;
     this.health = 3;
     this.maxHealth = 3;
     this.spawnTimer = 0;
-    this.spawnInterval = 1.1; // seconds between incoming balls
-    this.gameSpeed = 2.8; // meters per second
+    this.spawnInterval = 1.05;
+    this.gameSpeed = 3.2;
 
-    // Entity collections
+    // Collections
     this.targets = [];
     this.particles = [];
 
-    // Controller glove trackers
+    // Controller gloves & animation states
     this.gloves = [];
+    this.gloveColors = [0x00e5ff, 0xff0066];
     this.lastGlovePositions = [new THREE.Vector3(), new THREE.Vector3()];
     this.gloveVelocities = [new THREE.Vector3(), new THREE.Vector3()];
+    this.punchExtensions = [0, 0]; // For desktop click jab simulation
+    this.currentPunchHand = 0;
 
-    // Reusable math objects
+    // Math caches
     this.tmpVec = new THREE.Vector3();
     this.tmpControllerPos = new THREE.Vector3();
+    this.arenaAnimTime = 0;
   }
 
   init() {
-    this.setupEnvironment();
+    this.setupArenaEnvironment();
     this.setupBoxingGloves();
     this.setupSpatialUI();
+    this.setupDesktopPunchListener();
   }
 
-  setupEnvironment() {
-    // Atmospheric lights
-    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x111c33, 2.4);
-    this.add(hemiLight);
+  setupArenaEnvironment() {
+    this.arenaGroup = new THREE.Group();
+    this.arenaGroup.name = 'BoxingArena';
 
-    const dirLight = new THREE.DirectionalLight(0x7afcff, 2.5);
-    dirLight.position.set(2, 4, 1);
-    this.add(dirLight);
+    // 1. Arena Lighting
+    const ambientLight = new THREE.HemisphereLight(0xddeeff, 0x0a1020, 2.2);
+    this.arenaGroup.add(ambientLight);
 
-    const backLight = new THREE.DirectionalLight(0xff0055, 1.8);
-    backLight.position.set(-2, 3, -4);
-    this.add(backLight);
+    const mainSpot = new THREE.DirectionalLight(0x00f3ff, 2.6);
+    mainSpot.position.set(2, 5, 1);
+    this.arenaGroup.add(mainSpot);
 
-    // Target flight tunnel rings for spatial depth perception
-    this.tunnelRings = new THREE.Group();
-    const ringGeo = new THREE.TorusGeometry(1.2, 0.015, 16, 40);
-    const ringMat = new THREE.MeshBasicMaterial({
-      color: 0x24426b,
-      transparent: true,
-      opacity: 0.35,
-      wireframe: true,
+    const rimLight = new THREE.DirectionalLight(0xff0077, 2.2);
+    rimLight.position.set(-2, 4, -3);
+    this.arenaGroup.add(rimLight);
+
+    // 2. Boxing Ring Stage Floor (Radius 1.9m, comfortable fit)
+    const stageGeo = new THREE.CylinderGeometry(1.85, 1.95, 0.12, 32);
+    const stageMat = new THREE.MeshStandardMaterial({
+      color: 0x0c1222,
+      roughness: 0.35,
+      metalness: 0.8,
+    });
+    this.stageMesh = new THREE.Mesh(stageGeo, stageMat);
+    this.stageMesh.position.y = -0.06;
+    this.stageMesh.receiveShadow = true;
+    this.arenaGroup.add(this.stageMesh);
+
+    // Stage border neon ring
+    const borderRing = new THREE.Mesh(
+      new THREE.TorusGeometry(1.86, 0.022, 16, 48),
+      new THREE.MeshBasicMaterial({ color: 0x00f3ff })
+    );
+    borderRing.rotation.x = Math.PI / 2;
+    borderRing.position.y = 0.01;
+    this.arenaGroup.add(borderRing);
+
+    // Grid mat pattern on the floor
+    const gridHelper = new THREE.GridHelper(3.2, 12, 0x00d4ff, 0x142848);
+    gridHelper.position.y = 0.005;
+    this.arenaGroup.add(gridHelper);
+
+    // 3. Four Neon Corner Posts and Energy Ropes
+    const postPositions = [
+      [-1.3, -1.3],
+      [1.3, -1.3],
+      [1.3, 1.3],
+      [-1.3, 1.3],
+    ];
+    const postGeo = new THREE.CylinderGeometry(0.04, 0.05, 1.4, 16);
+    const postMat = new THREE.MeshStandardMaterial({
+      color: 0x152238,
+      metalness: 0.9,
+      roughness: 0.2,
     });
 
-    for (let z = -2; z >= -10; z -= 1.6) {
-      const ring = new THREE.Mesh(ringGeo, ringMat);
-      ring.position.set(0, 1.4, z);
-      this.tunnelRings.add(ring);
+    this.ropeTubes = [];
+    for (let i = 0; i < postPositions.length; i++) {
+      const [px, pz] = postPositions[i];
+      const post = new THREE.Mesh(postGeo, postMat);
+      post.position.set(px, 0.7, pz);
+
+      // Top glowing finial cap
+      const cap = new THREE.Mesh(
+        new THREE.SphereGeometry(0.065, 16, 16),
+        new THREE.MeshBasicMaterial({ color: i % 2 === 0 ? 0x00f3ff : 0xff0066 })
+      );
+      cap.position.y = 0.72;
+      post.add(cap);
+      this.arenaGroup.add(post);
+
+      // Connect perimeter energy ropes
+      const nextPos = postPositions[(i + 1) % postPositions.length];
+      for (const ropeHeight of [0.55, 0.95, 1.35]) {
+        const start = new THREE.Vector3(px, ropeHeight, pz);
+        const end = new THREE.Vector3(nextPos[0], ropeHeight, nextPos[1]);
+        const curve = new THREE.LineCurve3(start, end);
+        const ropeGeo = new THREE.TubeGeometry(curve, 1, 0.012, 8, false);
+        const ropeMesh = new THREE.Mesh(
+          ropeGeo,
+          new THREE.MeshBasicMaterial({
+            color: ropeHeight === 0.95 ? 0x00ffff : 0xff0055,
+            transparent: true,
+            opacity: 0.65,
+          })
+        );
+        this.arenaGroup.add(ropeMesh);
+        this.ropeTubes.push(ropeMesh);
+      }
     }
-    this.add(this.tunnelRings);
+
+    // 4. Target Launch Portal in the distance (at z = -7.0m)
+    this.portalGroup = new THREE.Group();
+    this.portalGroup.position.set(0, 1.45, -7.0);
+
+    // Glowing concentric energy rings
+    this.portalRings = [];
+    for (let r = 0; r < 3; r++) {
+      const pRing = new THREE.Mesh(
+        new THREE.TorusGeometry(0.85 - r * 0.22, 0.02, 16, 36),
+        new THREE.MeshBasicMaterial({
+          color: r === 1 ? 0xff0077 : 0x00e5ff,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.7,
+        })
+      );
+      this.portalGroup.add(pRing);
+      this.portalRings.push(pRing);
+    }
+
+    // Runway guide rails leading to the player
+    const runwayGeo = new THREE.PlaneGeometry(0.9, 7.0);
+    const runwayMat = new THREE.MeshBasicMaterial({
+      color: 0x051326,
+      transparent: true,
+      opacity: 0.5,
+      side: THREE.DoubleSide,
+    });
+    const runway = new THREE.Mesh(runwayGeo, runwayMat);
+    runway.rotation.x = -Math.PI / 2;
+    runway.position.set(0, 0.008, -3.5);
+    this.arenaGroup.add(runway);
+
+    // Floating spatial tunnel depth rings
+    this.tunnelRings = [];
+    const tRingGeo = new THREE.TorusGeometry(1.05, 0.012, 12, 32);
+    for (let z = -1.8; z >= -6.2; z -= 1.4) {
+      const ring = new THREE.Mesh(
+        tRingGeo,
+        new THREE.MeshBasicMaterial({
+          color: 0x1a3860,
+          transparent: true,
+          opacity: 0.45,
+        })
+      );
+      ring.position.set(0, 1.45, z);
+      this.arenaGroup.add(ring);
+      this.tunnelRings.push(ring);
+    }
+
+    this.arenaGroup.add(this.portalGroup);
+    this.add(this.arenaGroup);
   }
 
   setupBoxingGloves() {
-    // Create dual boxing gauntlets for visual feedback
-    const colors = [0x00d4ff, 0xff0066]; // Left cyan, Right magenta
+    this.gloves = [];
+    const gloveGeo = new THREE.SphereGeometry(0.095, 24, 20);
+    const cuffGeo = new THREE.CylinderGeometry(0.07, 0.08, 0.09, 16);
+    const cuffMat = new THREE.MeshStandardMaterial({
+      color: 0x181e2e,
+      roughness: 0.4,
+      metalness: 0.8,
+    });
+
     for (let i = 0; i < 2; i++) {
-      const gloveGroup = new THREE.Group();
-      gloveGroup.name = `Glove_${i}`;
+      const gloveRoot = new THREE.Group();
+      gloveRoot.name = `BoxingGlove_${i === 0 ? 'L' : 'R'}`;
 
-      // Fist sphere
+      // Fist mesh
       const fistMesh = new THREE.Mesh(
-        new THREE.SphereGeometry(0.09, 24, 20),
+        gloveGeo,
         new THREE.MeshStandardMaterial({
-          color: colors[i],
-          roughness: 0.25,
+          color: this.gloveColors[i],
+          emissive: this.gloveColors[i],
+          emissiveIntensity: 0.35,
+          roughness: 0.2,
           metalness: 0.7,
-          emissive: colors[i],
-          emissiveIntensity: 0.2,
         })
       );
 
-      // Wrist cuff
-      const cuff = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.065, 0.075, 0.08, 16),
-        new THREE.MeshStandardMaterial({
-          color: 0x1c2130,
-          roughness: 0.5,
-          metalness: 0.8,
-        })
-      );
+      // Wrist guard
+      const cuff = new THREE.Mesh(cuffGeo, cuffMat);
       cuff.rotation.x = Math.PI / 2;
-      cuff.position.z = 0.06;
+      cuff.position.z = 0.07;
+      gloveRoot.add(fistMesh, cuff);
 
-      gloveGroup.add(fistMesh, cuff);
-      gloveGroup.position.set(i === 0 ? -0.25 : 0.25, 1.3, -0.4);
-      this.add(gloveGroup);
-      this.gloves.push(gloveGroup);
+      // Impact halo
+      const glowRing = new THREE.Mesh(
+        new THREE.TorusGeometry(0.12, 0.008, 8, 24),
+        new THREE.MeshBasicMaterial({
+          color: this.gloveColors[i],
+          transparent: true,
+          opacity: 0.7,
+        })
+      );
+      glowRing.name = 'ImpactHalo';
+      glowRing.scale.setScalar(0.01);
+      gloveRoot.add(glowRing);
+
+      gloveRoot.position.set(i === 0 ? -0.26 : 0.26, 1.35, -0.45);
+      this.add(gloveRoot);
+      this.gloves.push(gloveRoot);
     }
   }
 
   setupSpatialUI() {
-    // Score & health indicators
     this.scoreText = new xb.UIText({
       text: 'SCORE: 0',
       style: { fontSize: 26, fontWeight: 'bold', color: '#00ffff' },
     });
 
     this.comboText = new xb.UIText({
-      text: 'COMBO x0',
-      style: { fontSize: 18, color: '#facc15' },
+      text: 'COMBO: 0x',
+      style: { fontSize: 20, fontWeight: 'bold', color: '#facc15' },
+    });
+
+    this.highScoreText = new xb.UIText({
+      text: 'BEST: 0',
+      style: { fontSize: 16, color: '#94a3b8' },
     });
 
     this.healthText = new xb.UIText({
@@ -241,18 +396,18 @@ class SpatialPuncherApp extends xb.Script {
     });
 
     this.statusText = new xb.UIText({
-      text: '🥊 PUNCH Cyan / Pink orbs!\n⚠️ AVOID burning Spikes!',
+      text: '🥊 Tap START to begin!\nPunch incoming orbs and avoid red spikes.',
       style: {
         fontSize: 16,
-        lineHeight: 1.3,
+        lineHeight: 1.35,
         textAlign: 'center',
-        opacity: 0.85,
+        opacity: 0.9,
         whiteSpace: 'pre-line',
       },
     });
 
     this.actionButton = new xb.UIButton({
-      label: 'START GAME',
+      label: 'START ROUND',
       icon: 'sports_mma',
       style: {
         width: '100%',
@@ -266,7 +421,7 @@ class SpatialPuncherApp extends xb.Script {
       },
     });
 
-    const header = new xb.UIPanel({
+    const scoreRow = new xb.UIPanel({
       style: {
         width: '100%',
         flexDirection: 'row',
@@ -277,16 +432,16 @@ class SpatialPuncherApp extends xb.Script {
     });
 
     this.hudCard = new xb.UICard({
-      size: { width: 0.58, height: 'auto' },
+      size: { width: 0.62, height: 'auto' },
       manipulation: true,
       edge: { scale: true },
       style: {
         flexDirection: 'column',
-        gap: 14,
+        gap: 12,
         padding: 18,
-        backgroundColor: 'rgba(10, 16, 30, 0.88)',
+        backgroundColor: 'rgba(8, 14, 28, 0.92)',
         borderRadius: 20,
-        borderColor: '#00e5ff',
+        borderColor: '#00f3ff',
         borderWidth: 1.5,
       },
       children: [
@@ -299,17 +454,31 @@ class SpatialPuncherApp extends xb.Script {
             color: '#ffffff',
           },
         }),
-        header,
+        scoreRow,
+        this.highScoreText,
         this.healthText,
         this.statusText,
         this.actionButton,
       ],
     });
 
-    // Position spatial card comfortably in peripheral field of view
-    this.hudCard.position.set(0.62, 1.45, -1.05);
-    this.hudCard.rotation.y = -0.32;
+    // Angle card ergonomically beside the player's striking field
+    this.hudCard.position.set(0.68, 1.45, -0.95);
+    this.hudCard.rotation.y = -0.36;
     this.add(this.hudCard);
+  }
+
+  setupDesktopPunchListener() {
+    window.addEventListener('pointerdown', (e) => {
+      this.sound.init();
+      if (this.gameState !== 'PLAYING') return;
+
+      // In desktop simulation, trigger an alternating punch forward
+      const hand = this.currentPunchHand;
+      this.currentPunchHand = 1 - this.currentPunchHand;
+      this.punchExtensions[hand] = 0.42; // Meter forward jab
+      this.sound.playWhoosh();
+    });
   }
 
   startGame() {
@@ -317,26 +486,26 @@ class SpatialPuncherApp extends xb.Script {
     this.score = 0;
     this.combo = 0;
     this.health = this.maxHealth;
-    this.spawnTimer = 0;
-    this.spawnInterval = 1.1;
-    this.gameSpeed = 2.8;
+    this.spawnTimer = 0.9; // Fast-track initial spawn
+    this.spawnInterval = 1.05;
+    this.gameSpeed = 3.2;
 
-    // Clear existing objects
-    for (const t of this.targets) {
-      this.remove(t.mesh);
-      t.mesh.geometry?.dispose();
-    }
-    this.targets = [];
+    // Purge any stale active entities
+    this.clearAllTargets();
 
     this.updateHUD();
-    this.statusText.text = 'READY! Punch incoming target orbs!';
-    this.actionButton.label = 'RESTART';
+    this.statusText.text = '🥊 INCOMING! Strike Cyan & Pink orbs!';
+    this.actionButton.label = 'RESTART ROUND';
     this.actionButton.icon = 'restart_alt';
+
+    // Immediate initial spawn for instantaneous feedback
+    this.spawnTarget();
   }
 
   updateHUD() {
     this.scoreText.text = `SCORE: ${this.score}`;
-    this.comboText.text = `COMBO x${this.combo}`;
+    this.comboText.text = `COMBO: ${this.combo}x`;
+    this.highScoreText.text = `BEST: ${Math.max(this.score, this.highScore)}`;
 
     let hearts = '';
     for (let i = 0; i < this.maxHealth; i++) {
@@ -345,60 +514,70 @@ class SpatialPuncherApp extends xb.Script {
     this.healthText.text = hearts.trim();
   }
 
+  clearAllTargets() {
+    for (const t of this.targets) {
+      this.remove(t.mesh);
+      t.mesh.geometry?.dispose();
+    }
+    this.targets = [];
+  }
+
   spawnTarget() {
-    // 72% chance Target ball (Punch!), 28% Obstacle (Dodge/Avoid!)
     const isObstacle = Math.random() < 0.28;
 
-    // Target positions in player's forward striking zone
-    const spawnX = (Math.random() - 0.5) * 1.1; // -0.55m to 0.55m
-    const spawnY = 1.15 + Math.random() * 0.55; // 1.15m to 1.7m
-    const spawnZ = -6.5; // Starts in distance
+    // Target positions within the player's strike range
+    const spawnX = (Math.random() - 0.5) * 0.9; // -0.45m to 0.45m
+    const spawnY = 1.2 + Math.random() * 0.5; // 1.2m to 1.7m
+    const spawnZ = -6.8; // Starts right out of the launch portal
 
     let mesh;
     let radius;
 
     if (!isObstacle) {
-      radius = 0.11;
-      const orbColor = Math.random() > 0.5 ? 0x00f3ff : 0xff1493;
+      // Punch target orb
+      radius = 0.12;
+      const isCyan = Math.random() > 0.5;
+      const orbColor = isCyan ? 0x00f3ff : 0xff0066;
+
       const geometry = new THREE.SphereGeometry(radius, 24, 20);
       const material = new THREE.MeshStandardMaterial({
         color: orbColor,
         emissive: orbColor,
         emissiveIntensity: 0.6,
-        roughness: 0.1,
+        roughness: 0.15,
         metalness: 0.8,
       });
       mesh = new THREE.Mesh(geometry, material);
 
-      // Add a rotating halo ring around punch targets
+      // Rotating targeting halo
       const halo = new THREE.Mesh(
-        new THREE.TorusGeometry(radius * 1.4, 0.012, 12, 24),
+        new THREE.TorusGeometry(radius * 1.38, 0.012, 12, 28),
         new THREE.MeshBasicMaterial({ color: orbColor, wireframe: true })
       );
       mesh.add(halo);
     } else {
-      // Obstacle hazard: Spiked fiery core
+      // Hazard Spike Ball
       radius = 0.14;
       const geometry = new THREE.IcosahedronGeometry(radius, 1);
       const material = new THREE.MeshStandardMaterial({
-        color: 0xff3b30,
+        color: 0xff2200,
         emissive: 0x990000,
-        emissiveIntensity: 0.8,
+        emissiveIntensity: 0.75,
         roughness: 0.4,
         metalness: 0.9,
       });
       mesh = new THREE.Mesh(geometry, material);
 
-      // Warning spikes
-      const spikeMat = new THREE.MeshBasicMaterial({ color: 0xffcc00 });
-      for (let i = 0; i < 4; i++) {
+      // Warning hazard spikes
+      const spikeMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
+      for (let i = 0; i < 6; i++) {
         const spike = new THREE.Mesh(
-          new THREE.ConeGeometry(0.04, 0.12, 8),
+          new THREE.ConeGeometry(0.04, 0.13, 8),
           spikeMat
         );
-        spike.rotation.z = (i * Math.PI) / 2;
-        spike.position.x = Math.cos((i * Math.PI) / 2) * radius;
-        spike.position.y = Math.sin((i * Math.PI) / 2) * radius;
+        spike.rotation.z = (i * Math.PI) / 3;
+        spike.position.x = Math.cos((i * Math.PI) / 3) * radius;
+        spike.position.y = Math.sin((i * Math.PI) / 3) * radius;
         mesh.add(spike);
       }
     }
@@ -411,13 +590,12 @@ class SpatialPuncherApp extends xb.Script {
       mesh,
       radius,
       isObstacle,
-      active: true,
-      rotationSpeed: (Math.random() - 0.5) * 4.0,
+      rotationSpeed: (Math.random() - 0.5) * 4.5,
     });
   }
 
-  createHitExplosion(pos, color, count = 16) {
-    const pGeo = new THREE.SphereGeometry(0.02, 8, 8);
+  createHitExplosion(pos, color, count = 18) {
+    const pGeo = new THREE.SphereGeometry(0.022, 8, 8);
     const pMat = new THREE.MeshBasicMaterial({ color });
 
     for (let i = 0; i < count; i++) {
@@ -426,61 +604,79 @@ class SpatialPuncherApp extends xb.Script {
       pMesh.xb = { pointerEvents: 'none' };
 
       const velocity = new THREE.Vector3(
-        (Math.random() - 0.5) * 3.5,
-        (Math.random() - 0.5) * 3.5,
-        (Math.random() - 0.5) * 3.5
+        (Math.random() - 0.5) * 4.0,
+        (Math.random() - 0.5) * 4.0,
+        (Math.random() - 0.5) * 4.0
       );
 
       this.add(pMesh);
       this.particles.push({
         mesh: pMesh,
         velocity,
-        life: 0.5,
-        maxLife: 0.5,
+        life: 0.45,
+        maxLife: 0.45,
       });
     }
   }
 
-  updateGloveTracking(delta) {
+  updateGloveTracking(dt) {
     const controllers = xb.core?.input?.controllers || [];
 
     for (let i = 0; i < 2; i++) {
       const glove = this.gloves[i];
       const controller = controllers[i];
 
+      // Relax desktop click jab offset back to idle
+      if (this.punchExtensions[i] > 0) {
+        this.punchExtensions[i] = Math.max(0, this.punchExtensions[i] - dt * 2.6);
+      }
+
       if (controller && controller.visible) {
-        // Track VR/AR Controller or Hand joint directly
+        // XR Controller or Hand Joint direct tracking
         controller.getWorldPosition(this.tmpControllerPos);
-        glove.position.lerp(this.tmpControllerPos, 0.7);
-        glove.quaternion.slerp(controller.quaternion, 0.7);
+        glove.position.lerp(this.tmpControllerPos, 0.75);
+        glove.quaternion.slerp(controller.quaternion, 0.75);
       } else {
-        // Desktop / preview simulated idle float
+        // Desktop simulation posture with interactive punch extension
         const time = performance.now() * 0.003;
         const side = i === 0 ? -1 : 1;
-        const defaultX = side * 0.26;
-        const defaultY = 1.35 + Math.sin(time + i) * 0.04;
-        const defaultZ = -0.55;
+        const defaultX = side * 0.24;
+        const defaultY = 1.34 + Math.sin(time + i * 1.5) * 0.035;
+        const defaultZ = -0.5 - this.punchExtensions[i];
         glove.position.set(defaultX, defaultY, defaultZ);
       }
 
-      // Calculate fist punch velocity
-      if (delta > 0) {
+      // Compute physical strike velocity
+      if (dt > 0) {
         this.gloveVelocities[i]
           .subVectors(glove.position, this.lastGlovePositions[i])
-          .divideScalar(delta);
+          .divideScalar(dt);
       }
       this.lastGlovePositions[i].copy(glove.position);
     }
   }
 
-  update(delta) {
-    this.updateGloveTracking(delta);
+  update() {
+    // Robust Delta Time calculation (safeguards against NaN)
+    const dt = Math.min(Math.max(xb.getDeltaTime ? xb.getDeltaTime() : 0.016, 0.001), 0.1);
 
-    // Update particle effects
+    this.arenaAnimTime += dt;
+
+    // Animate target launch portal rings
+    for (let r = 0; r < this.portalRings.length; r++) {
+      const ring = this.portalRings[r];
+      ring.rotation.z += (r % 2 === 0 ? 1 : -1) * 0.8 * dt;
+      const s = 1.0 + Math.sin(this.arenaAnimTime * 3 + r) * 0.04;
+      ring.scale.set(s, s, s);
+    }
+
+    this.updateGloveTracking(dt);
+
+    // Update particle lifetime and simulation
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const p = this.particles[i];
-      p.life -= delta;
-      p.mesh.position.addScaledVector(p.velocity, delta);
+      p.life -= dt;
+      p.mesh.position.addScaledVector(p.velocity, dt);
       const scale = Math.max(0.01, p.life / p.maxLife);
       p.mesh.scale.setScalar(scale);
 
@@ -493,37 +689,37 @@ class SpatialPuncherApp extends xb.Script {
 
     if (this.gameState !== 'PLAYING') return;
 
-    // Spawning cadence with progressive difficulty ramp
-    this.spawnTimer += delta;
+    // Spawn countdown cadence with gradual progression
+    this.spawnTimer += dt;
     if (this.spawnTimer >= this.spawnInterval) {
       this.spawnTimer = 0;
       this.spawnTarget();
 
-      // Progressive speed scaling
-      this.spawnInterval = Math.max(0.65, this.spawnInterval - 0.006);
-      this.gameSpeed = Math.min(4.8, this.gameSpeed + 0.02);
+      // Progressive difficulty ramp
+      this.spawnInterval = Math.max(0.68, this.spawnInterval - 0.005);
+      this.gameSpeed = Math.min(4.9, this.gameSpeed + 0.02);
     }
 
-    // Player head position for dodging obstacles
+    // Head position for dodging obstacles
     const headPos = xb.core.camera
       ? xb.core.camera.position
       : new THREE.Vector3(0, 1.6, 0);
 
-    // Update and collide flying targets
+    // Update incoming targets & test collisions
     for (let i = this.targets.length - 1; i >= 0; i--) {
       const t = this.targets[i];
-      t.mesh.position.z += this.gameSpeed * delta;
-      t.mesh.rotation.y += t.rotationSpeed * delta;
-      t.mesh.rotation.x += t.rotationSpeed * 0.5 * delta;
+      t.mesh.position.z += this.gameSpeed * dt;
+      t.mesh.rotation.y += t.rotationSpeed * dt;
+      t.mesh.rotation.x += t.rotationSpeed * 0.5 * dt;
 
-      // 1. Check Glove Punch Collisions
+      // 1. Collision check: Glove punch strike
       let hitGloveIndex = -1;
       for (let g = 0; g < 2; g++) {
         const glovePos = this.gloves[g].position;
         const dist = glovePos.distanceTo(t.mesh.position);
-        const hitThreshold = t.radius + 0.12; // glove radius + target radius
+        const hitDistance = t.radius + 0.14;
 
-        if (dist < hitThreshold) {
+        if (dist < hitDistance) {
           hitGloveIndex = g;
           break;
         }
@@ -531,64 +727,64 @@ class SpatialPuncherApp extends xb.Script {
 
       if (hitGloveIndex !== -1) {
         if (!t.isObstacle) {
-          // Successful punch on target orb!
+          // Punch landed on target orb!
           this.combo++;
-          const punchBonus = 100 + (this.combo > 1 ? (this.combo - 1) * 25 : 0);
-          this.score += punchBonus;
+          const scoreBonus = 100 + (this.combo > 1 ? (this.combo - 1) * 25 : 0);
+          this.score += scoreBonus;
 
-          this.sound.playPunch(260 + Math.min(400, this.combo * 25));
-          this.sound.playScoreChime();
+          this.sound.playPunch(260 + Math.min(380, this.combo * 20));
+          this.sound.playScoreChime(this.combo);
 
           this.createHitExplosion(
             t.mesh.position,
             t.mesh.material.color.getHex(),
-            20
+            22
           );
-          this.statusText.text = `💥 CRUSHING PUNCH! +${punchBonus}`;
+          this.statusText.text = `💥 HIT! +${scoreBonus} (${this.combo}x Combo)`;
         } else {
-          // Punched a danger obstacle by mistake!
-          this.handlePlayerDamage('Hit a Spiked Hazard!');
-          this.createHitExplosion(t.mesh.position, 0xff2200, 24);
+          // Punched danger hazard obstacle!
+          this.handlePlayerDamage('Punched a Spiked Hazard!');
+          this.createHitExplosion(t.mesh.position, 0xff2200, 26);
         }
 
         this.remove(t.mesh);
-        t.mesh.geometry.dispose();
+        t.mesh.geometry?.dispose();
         this.targets.splice(i, 1);
         this.updateHUD();
         continue;
       }
 
-      // 2. Check Obstacle vs Head / Body Collision (Dodge requirement)
+      // 2. Collision check: Obstacle collision with Head/Body (Dodge requirement)
       if (t.isObstacle) {
         const headDist = headPos.distanceTo(t.mesh.position);
         if (headDist < t.radius + 0.22) {
-          this.handlePlayerDamage('Failed to dodge obstacle!');
-          this.createHitExplosion(t.mesh.position, 0xff0033, 26);
+          this.handlePlayerDamage('Failed to dodge hazard obstacle!');
+          this.createHitExplosion(t.mesh.position, 0xff0044, 28);
           this.remove(t.mesh);
-          t.mesh.geometry.dispose();
+          t.mesh.geometry?.dispose();
           this.targets.splice(i, 1);
           continue;
         }
       }
 
-      // 3. Check targets passing beyond the player
-      if (t.mesh.position.z > 0.4) {
+      // 3. Targets passing past the player
+      if (t.mesh.position.z > 0.45) {
         if (!t.isObstacle) {
-          // Missed an orb - resets combo
+          // Missed punch orb
           if (this.combo > 0) {
             this.combo = 0;
-            this.statusText.text = 'Combo lost!';
+            this.statusText.text = '⚠️ Combo streak lost!';
             this.updateHUD();
           }
         } else {
-          // Successfully dodged obstacle!
-          this.score += 50;
-          this.statusText.text = '⚡ Clean Dodge! +50';
+          // Cleanly dodged spiked hazard!
+          this.score += 60;
+          this.statusText.text = '⚡ Clean Dodge! +60';
           this.updateHUD();
         }
 
         this.remove(t.mesh);
-        t.mesh.geometry.dispose();
+        t.mesh.geometry?.dispose();
         this.targets.splice(i, 1);
       }
     }
@@ -597,55 +793,54 @@ class SpatialPuncherApp extends xb.Script {
   handlePlayerDamage(reason) {
     this.health--;
     this.combo = 0;
-    this.sound.playObstacleHit();
+    this.sound.playHazardHit();
     this.updateHUD();
 
     if (this.health <= 0) {
       this.gameState = 'GAMEOVER';
+      if (this.score > this.highScore) {
+        this.highScore = this.score;
+      }
       this.statusText.text = `💀 KNOCKOUT!\n${reason}\nFinal Score: ${this.score}`;
       this.actionButton.label = 'TRY AGAIN';
       this.actionButton.icon = 'refresh';
     } else {
-      this.statusText.text = `⚠️ WARNING: ${reason} (-1 Heart)`;
+      this.statusText.text = `⚠️ DAMAGE: ${reason} (-1 Heart)`;
     }
   }
 
   /**
-   * Pointer / Click fallback punch support for desktop simulation
+   * Pointer fallback strike for raycast clicks directly on targets
    */
   onSelectStart(event) {
     if (this.gameState !== 'PLAYING') return;
 
-    // Check if clicked directly on an incoming target
     const targetObj = event.target;
     const targetIndex = this.targets.findIndex((t) => t.mesh === targetObj);
     if (targetIndex !== -1) {
       const t = this.targets[targetIndex];
       if (!t.isObstacle) {
         this.combo++;
-        const punchBonus = 100 + this.combo * 20;
-        this.score += punchBonus;
-        this.sound.playPunch(300);
-        this.sound.playScoreChime();
+        const scoreBonus = 100 + this.combo * 20;
+        this.score += scoreBonus;
+        this.sound.playPunch(320);
+        this.sound.playScoreChime(this.combo);
         this.createHitExplosion(t.mesh.position, 0x00f3ff, 20);
-        this.statusText.text = `💥 JAB HIT! +${punchBonus}`;
+        this.statusText.text = `💥 JAB! +${scoreBonus}`;
       } else {
         this.handlePlayerDamage('Punched a hazard bomb!');
         this.createHitExplosion(t.mesh.position, 0xff0000, 24);
       }
 
       this.remove(t.mesh);
-      t.mesh.geometry.dispose();
+      t.mesh.geometry?.dispose();
       this.targets.splice(targetIndex, 1);
       this.updateHUD();
     }
   }
 
   dispose() {
-    for (const t of this.targets) {
-      this.remove(t.mesh);
-      t.mesh.geometry?.dispose();
-    }
+    this.clearAllTargets();
     for (const p of this.particles) {
       this.remove(p.mesh);
       p.mesh.geometry?.dispose();
@@ -653,7 +848,6 @@ class SpatialPuncherApp extends xb.Script {
   }
 }
 
-// Application entry point
 document.addEventListener('DOMContentLoaded', async () => {
   const options = new xb.Options();
   options.enableHands();
@@ -662,7 +856,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   options.simulator.defaultMode = xb.SimulatorMode.CONTROLLER;
   options.setAppTitle('Spatial Puncher');
   options.setAppDescription(
-    'Punch incoming target orbs with high-speed fists and dodge spiked obstacles!'
+    'Step into the spatial boxing arena! Punch incoming orbs and dodge spiked obstacles.'
   );
 
   xb.add(new SpatialPuncherApp());
