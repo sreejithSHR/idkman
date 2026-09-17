@@ -1,0 +1,673 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <title>Spatial Puncher | XR Blocks</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <link rel="stylesheet" href="https://xrblocks.github.io/css/xr.css" />
+    <script>
+      window.litDisableBundleWarning = true;
+    </script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
+          "three/": "https://cdn.jsdelivr.net/npm/three@0.184.0/",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/",
+          "@pmndrs/uikit": "https://cdn.jsdelivr.net/npm/@pmndrs/uikit@1.0.64/dist/index.min.js",
+          "@pmndrs/uikit-pub-sub": "https://cdn.jsdelivr.net/npm/@pmndrs/uikit-pub-sub@1.0.64/dist/index.min.js",
+          "@pmndrs/msdfonts": "https://cdn.jsdelivr.net/npm/@pmndrs/msdfonts@1.0.64/dist/index.min.js",
+          "@preact/signals-core": "https://cdn.jsdelivr.net/npm/@preact/signals-core@1.14.0/dist/signals-core.mjs",
+          "yoga-layout/load": "https://cdn.jsdelivr.net/npm/yoga-layout@3.2.1/dist/src/load.js",
+          "lit": "https://esm.sh/lit@3.3.1",
+          "lit/": "https://esm.sh/lit@3.3.1/",
+          "xrblocks": "https://cdn.jsdelivr.net/npm/xrblocks@0.21.1/build/xrblocks.js",
+          "xrblocks/addons/": "https://cdn.jsdelivr.net/npm/xrblocks@0.21.1/build/addons/"
+        }
+      }
+    </script>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+        background-color: #0b0f19;
+      }
+    </style>
+  </head>
+  <body>
+    <script type="module">
+import * as THREE from 'three';
+import * as xb from 'xrblocks';
+
+/**
+ * Procedural Web Audio synthesizer for crisp punch hits, swooshes, and obstacle alerts.
+ */
+class SoundFX {
+  constructor() {
+    this.ctx = null;
+  }
+
+  init() {
+    if (!this.ctx) {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (AudioContext) {
+        this.ctx = new AudioContext();
+      }
+    }
+    if (this.ctx && this.ctx.state === 'suspended') {
+      this.ctx.resume();
+    }
+  }
+
+  playPunch(pitch = 220) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(pitch, t);
+    osc.frequency.exponentialRampToValueAtTime(45, t + 0.18);
+
+    gain.gain.setValueAtTime(0.4, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.2);
+  }
+
+  playObstacleHit() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(110, t);
+    osc.frequency.linearRampToValueAtTime(40, t + 0.35);
+
+    gain.gain.setValueAtTime(0.5, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.35);
+  }
+
+  playScoreChime() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, t); // D5
+    osc.frequency.setValueAtTime(880.0, t + 0.08); // A5
+
+    gain.gain.setValueAtTime(0.25, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.3);
+  }
+}
+
+/**
+ * Main Spatial Puncher Script
+ */
+class SpatialPuncherApp extends xb.Script {
+  constructor() {
+    super();
+    this.sound = new SoundFX();
+
+    // Game states
+    this.gameState = 'READY'; // READY, PLAYING, GAMEOVER
+    this.score = 0;
+    this.combo = 0;
+    this.health = 3;
+    this.maxHealth = 3;
+    this.spawnTimer = 0;
+    this.spawnInterval = 1.1; // seconds between incoming balls
+    this.gameSpeed = 2.8; // meters per second
+
+    // Entity collections
+    this.targets = [];
+    this.particles = [];
+
+    // Controller glove trackers
+    this.gloves = [];
+    this.lastGlovePositions = [new THREE.Vector3(), new THREE.Vector3()];
+    this.gloveVelocities = [new THREE.Vector3(), new THREE.Vector3()];
+
+    // Reusable math objects
+    this.tmpVec = new THREE.Vector3();
+    this.tmpControllerPos = new THREE.Vector3();
+  }
+
+  init() {
+    this.setupEnvironment();
+    this.setupBoxingGloves();
+    this.setupSpatialUI();
+  }
+
+  setupEnvironment() {
+    // Atmospheric lights
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x111c33, 2.4);
+    this.add(hemiLight);
+
+    const dirLight = new THREE.DirectionalLight(0x7afcff, 2.5);
+    dirLight.position.set(2, 4, 1);
+    this.add(dirLight);
+
+    const backLight = new THREE.DirectionalLight(0xff0055, 1.8);
+    backLight.position.set(-2, 3, -4);
+    this.add(backLight);
+
+    // Target flight tunnel rings for spatial depth perception
+    this.tunnelRings = new THREE.Group();
+    const ringGeo = new THREE.TorusGeometry(1.2, 0.015, 16, 40);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0x24426b,
+      transparent: true,
+      opacity: 0.35,
+      wireframe: true,
+    });
+
+    for (let z = -2; z >= -10; z -= 1.6) {
+      const ring = new THREE.Mesh(ringGeo, ringMat);
+      ring.position.set(0, 1.4, z);
+      this.tunnelRings.add(ring);
+    }
+    this.add(this.tunnelRings);
+  }
+
+  setupBoxingGloves() {
+    // Create dual boxing gauntlets for visual feedback
+    const colors = [0x00d4ff, 0xff0066]; // Left cyan, Right magenta
+    for (let i = 0; i < 2; i++) {
+      const gloveGroup = new THREE.Group();
+      gloveGroup.name = `Glove_${i}`;
+
+      // Fist sphere
+      const fistMesh = new THREE.Mesh(
+        new THREE.SphereGeometry(0.09, 24, 20),
+        new THREE.MeshStandardMaterial({
+          color: colors[i],
+          roughness: 0.25,
+          metalness: 0.7,
+          emissive: colors[i],
+          emissiveIntensity: 0.2,
+        })
+      );
+
+      // Wrist cuff
+      const cuff = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.065, 0.075, 0.08, 16),
+        new THREE.MeshStandardMaterial({
+          color: 0x1c2130,
+          roughness: 0.5,
+          metalness: 0.8,
+        })
+      );
+      cuff.rotation.x = Math.PI / 2;
+      cuff.position.z = 0.06;
+
+      gloveGroup.add(fistMesh, cuff);
+      gloveGroup.position.set(i === 0 ? -0.25 : 0.25, 1.3, -0.4);
+      this.add(gloveGroup);
+      this.gloves.push(gloveGroup);
+    }
+  }
+
+  setupSpatialUI() {
+    // Score & health indicators
+    this.scoreText = new xb.UIText({
+      text: 'SCORE: 0',
+      style: { fontSize: 26, fontWeight: 'bold', color: '#00ffff' },
+    });
+
+    this.comboText = new xb.UIText({
+      text: 'COMBO x0',
+      style: { fontSize: 18, color: '#facc15' },
+    });
+
+    this.healthText = new xb.UIText({
+      text: '❤️ ❤️ ❤️',
+      style: { fontSize: 24, textAlign: 'center' },
+    });
+
+    this.statusText = new xb.UIText({
+      text: '🥊 PUNCH Cyan / Pink orbs!\n⚠️ AVOID burning Spikes!',
+      style: {
+        fontSize: 16,
+        lineHeight: 1.3,
+        textAlign: 'center',
+        opacity: 0.85,
+        whiteSpace: 'pre-line',
+      },
+    });
+
+    this.actionButton = new xb.UIButton({
+      label: 'START GAME',
+      icon: 'sports_mma',
+      style: {
+        width: '100%',
+        backgroundColor: '#0088ff',
+        borderRadius: 14,
+        padding: 12,
+      },
+      onClick: () => {
+        this.sound.init();
+        this.startGame();
+      },
+    });
+
+    const header = new xb.UIPanel({
+      style: {
+        width: '100%',
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+      },
+      children: [this.scoreText, this.comboText],
+    });
+
+    this.hudCard = new xb.UICard({
+      size: { width: 0.58, height: 'auto' },
+      manipulation: true,
+      edge: { scale: true },
+      style: {
+        flexDirection: 'column',
+        gap: 14,
+        padding: 18,
+        backgroundColor: 'rgba(10, 16, 30, 0.88)',
+        borderRadius: 20,
+        borderColor: '#00e5ff',
+        borderWidth: 1.5,
+      },
+      children: [
+        new xb.UIText({
+          text: 'SPATIAL PUNCHER',
+          style: {
+            fontSize: 28,
+            fontWeight: 'bold',
+            textAlign: 'center',
+            color: '#ffffff',
+          },
+        }),
+        header,
+        this.healthText,
+        this.statusText,
+        this.actionButton,
+      ],
+    });
+
+    // Position spatial card comfortably in peripheral field of view
+    this.hudCard.position.set(0.62, 1.45, -1.05);
+    this.hudCard.rotation.y = -0.32;
+    this.add(this.hudCard);
+  }
+
+  startGame() {
+    this.gameState = 'PLAYING';
+    this.score = 0;
+    this.combo = 0;
+    this.health = this.maxHealth;
+    this.spawnTimer = 0;
+    this.spawnInterval = 1.1;
+    this.gameSpeed = 2.8;
+
+    // Clear existing objects
+    for (const t of this.targets) {
+      this.remove(t.mesh);
+      t.mesh.geometry?.dispose();
+    }
+    this.targets = [];
+
+    this.updateHUD();
+    this.statusText.text = 'READY! Punch incoming target orbs!';
+    this.actionButton.label = 'RESTART';
+    this.actionButton.icon = 'restart_alt';
+  }
+
+  updateHUD() {
+    this.scoreText.text = `SCORE: ${this.score}`;
+    this.comboText.text = `COMBO x${this.combo}`;
+
+    let hearts = '';
+    for (let i = 0; i < this.maxHealth; i++) {
+      hearts += i < this.health ? '❤️ ' : '🖤 ';
+    }
+    this.healthText.text = hearts.trim();
+  }
+
+  spawnTarget() {
+    // 72% chance Target ball (Punch!), 28% Obstacle (Dodge/Avoid!)
+    const isObstacle = Math.random() < 0.28;
+
+    // Target positions in player's forward striking zone
+    const spawnX = (Math.random() - 0.5) * 1.1; // -0.55m to 0.55m
+    const spawnY = 1.15 + Math.random() * 0.55; // 1.15m to 1.7m
+    const spawnZ = -6.5; // Starts in distance
+
+    let mesh;
+    let radius;
+
+    if (!isObstacle) {
+      radius = 0.11;
+      const orbColor = Math.random() > 0.5 ? 0x00f3ff : 0xff1493;
+      const geometry = new THREE.SphereGeometry(radius, 24, 20);
+      const material = new THREE.MeshStandardMaterial({
+        color: orbColor,
+        emissive: orbColor,
+        emissiveIntensity: 0.6,
+        roughness: 0.1,
+        metalness: 0.8,
+      });
+      mesh = new THREE.Mesh(geometry, material);
+
+      // Add a rotating halo ring around punch targets
+      const halo = new THREE.Mesh(
+        new THREE.TorusGeometry(radius * 1.4, 0.012, 12, 24),
+        new THREE.MeshBasicMaterial({ color: orbColor, wireframe: true })
+      );
+      mesh.add(halo);
+    } else {
+      // Obstacle hazard: Spiked fiery core
+      radius = 0.14;
+      const geometry = new THREE.IcosahedronGeometry(radius, 1);
+      const material = new THREE.MeshStandardMaterial({
+        color: 0xff3b30,
+        emissive: 0x990000,
+        emissiveIntensity: 0.8,
+        roughness: 0.4,
+        metalness: 0.9,
+      });
+      mesh = new THREE.Mesh(geometry, material);
+
+      // Warning spikes
+      const spikeMat = new THREE.MeshBasicMaterial({ color: 0xffcc00 });
+      for (let i = 0; i < 4; i++) {
+        const spike = new THREE.Mesh(
+          new THREE.ConeGeometry(0.04, 0.12, 8),
+          spikeMat
+        );
+        spike.rotation.z = (i * Math.PI) / 2;
+        spike.position.x = Math.cos((i * Math.PI) / 2) * radius;
+        spike.position.y = Math.sin((i * Math.PI) / 2) * radius;
+        mesh.add(spike);
+      }
+    }
+
+    mesh.position.set(spawnX, spawnY, spawnZ);
+    mesh.xb = { pointerEvents: 'auto', reticleMode: 'auto' };
+
+    this.add(mesh);
+    this.targets.push({
+      mesh,
+      radius,
+      isObstacle,
+      active: true,
+      rotationSpeed: (Math.random() - 0.5) * 4.0,
+    });
+  }
+
+  createHitExplosion(pos, color, count = 16) {
+    const pGeo = new THREE.SphereGeometry(0.02, 8, 8);
+    const pMat = new THREE.MeshBasicMaterial({ color });
+
+    for (let i = 0; i < count; i++) {
+      const pMesh = new THREE.Mesh(pGeo, pMat);
+      pMesh.position.copy(pos);
+      pMesh.xb = { pointerEvents: 'none' };
+
+      const velocity = new THREE.Vector3(
+        (Math.random() - 0.5) * 3.5,
+        (Math.random() - 0.5) * 3.5,
+        (Math.random() - 0.5) * 3.5
+      );
+
+      this.add(pMesh);
+      this.particles.push({
+        mesh: pMesh,
+        velocity,
+        life: 0.5,
+        maxLife: 0.5,
+      });
+    }
+  }
+
+  updateGloveTracking(delta) {
+    const controllers = xb.core?.input?.controllers || [];
+
+    for (let i = 0; i < 2; i++) {
+      const glove = this.gloves[i];
+      const controller = controllers[i];
+
+      if (controller && controller.visible) {
+        // Track VR/AR Controller or Hand joint directly
+        controller.getWorldPosition(this.tmpControllerPos);
+        glove.position.lerp(this.tmpControllerPos, 0.7);
+        glove.quaternion.slerp(controller.quaternion, 0.7);
+      } else {
+        // Desktop / preview simulated idle float
+        const time = performance.now() * 0.003;
+        const side = i === 0 ? -1 : 1;
+        const defaultX = side * 0.26;
+        const defaultY = 1.35 + Math.sin(time + i) * 0.04;
+        const defaultZ = -0.55;
+        glove.position.set(defaultX, defaultY, defaultZ);
+      }
+
+      // Calculate fist punch velocity
+      if (delta > 0) {
+        this.gloveVelocities[i]
+          .subVectors(glove.position, this.lastGlovePositions[i])
+          .divideScalar(delta);
+      }
+      this.lastGlovePositions[i].copy(glove.position);
+    }
+  }
+
+  update(delta) {
+    this.updateGloveTracking(delta);
+
+    // Update particle effects
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      const p = this.particles[i];
+      p.life -= delta;
+      p.mesh.position.addScaledVector(p.velocity, delta);
+      const scale = Math.max(0.01, p.life / p.maxLife);
+      p.mesh.scale.setScalar(scale);
+
+      if (p.life <= 0) {
+        this.remove(p.mesh);
+        p.mesh.geometry.dispose();
+        this.particles.splice(i, 1);
+      }
+    }
+
+    if (this.gameState !== 'PLAYING') return;
+
+    // Spawning cadence with progressive difficulty ramp
+    this.spawnTimer += delta;
+    if (this.spawnTimer >= this.spawnInterval) {
+      this.spawnTimer = 0;
+      this.spawnTarget();
+
+      // Progressive speed scaling
+      this.spawnInterval = Math.max(0.65, this.spawnInterval - 0.006);
+      this.gameSpeed = Math.min(4.8, this.gameSpeed + 0.02);
+    }
+
+    // Player head position for dodging obstacles
+    const headPos = xb.core.camera
+      ? xb.core.camera.position
+      : new THREE.Vector3(0, 1.6, 0);
+
+    // Update and collide flying targets
+    for (let i = this.targets.length - 1; i >= 0; i--) {
+      const t = this.targets[i];
+      t.mesh.position.z += this.gameSpeed * delta;
+      t.mesh.rotation.y += t.rotationSpeed * delta;
+      t.mesh.rotation.x += t.rotationSpeed * 0.5 * delta;
+
+      // 1. Check Glove Punch Collisions
+      let hitGloveIndex = -1;
+      for (let g = 0; g < 2; g++) {
+        const glovePos = this.gloves[g].position;
+        const dist = glovePos.distanceTo(t.mesh.position);
+        const hitThreshold = t.radius + 0.12; // glove radius + target radius
+
+        if (dist < hitThreshold) {
+          hitGloveIndex = g;
+          break;
+        }
+      }
+
+      if (hitGloveIndex !== -1) {
+        if (!t.isObstacle) {
+          // Successful punch on target orb!
+          this.combo++;
+          const punchBonus = 100 + (this.combo > 1 ? (this.combo - 1) * 25 : 0);
+          this.score += punchBonus;
+
+          this.sound.playPunch(260 + Math.min(400, this.combo * 25));
+          this.sound.playScoreChime();
+
+          this.createHitExplosion(
+            t.mesh.position,
+            t.mesh.material.color.getHex(),
+            20
+          );
+          this.statusText.text = `💥 CRUSHING PUNCH! +${punchBonus}`;
+        } else {
+          // Punched a danger obstacle by mistake!
+          this.handlePlayerDamage('Hit a Spiked Hazard!');
+          this.createHitExplosion(t.mesh.position, 0xff2200, 24);
+        }
+
+        this.remove(t.mesh);
+        t.mesh.geometry.dispose();
+        this.targets.splice(i, 1);
+        this.updateHUD();
+        continue;
+      }
+
+      // 2. Check Obstacle vs Head / Body Collision (Dodge requirement)
+      if (t.isObstacle) {
+        const headDist = headPos.distanceTo(t.mesh.position);
+        if (headDist < t.radius + 0.22) {
+          this.handlePlayerDamage('Failed to dodge obstacle!');
+          this.createHitExplosion(t.mesh.position, 0xff0033, 26);
+          this.remove(t.mesh);
+          t.mesh.geometry.dispose();
+          this.targets.splice(i, 1);
+          continue;
+        }
+      }
+
+      // 3. Check targets passing beyond the player
+      if (t.mesh.position.z > 0.4) {
+        if (!t.isObstacle) {
+          // Missed an orb - resets combo
+          if (this.combo > 0) {
+            this.combo = 0;
+            this.statusText.text = 'Combo lost!';
+            this.updateHUD();
+          }
+        } else {
+          // Successfully dodged obstacle!
+          this.score += 50;
+          this.statusText.text = '⚡ Clean Dodge! +50';
+          this.updateHUD();
+        }
+
+        this.remove(t.mesh);
+        t.mesh.geometry.dispose();
+        this.targets.splice(i, 1);
+      }
+    }
+  }
+
+  handlePlayerDamage(reason) {
+    this.health--;
+    this.combo = 0;
+    this.sound.playObstacleHit();
+    this.updateHUD();
+
+    if (this.health <= 0) {
+      this.gameState = 'GAMEOVER';
+      this.statusText.text = `💀 KNOCKOUT!\n${reason}\nFinal Score: ${this.score}`;
+      this.actionButton.label = 'TRY AGAIN';
+      this.actionButton.icon = 'refresh';
+    } else {
+      this.statusText.text = `⚠️ WARNING: ${reason} (-1 Heart)`;
+    }
+  }
+
+  /**
+   * Pointer / Click fallback punch support for desktop simulation
+   */
+  onSelectStart(event) {
+    if (this.gameState !== 'PLAYING') return;
+
+    // Check if clicked directly on an incoming target
+    const targetObj = event.target;
+    const targetIndex = this.targets.findIndex((t) => t.mesh === targetObj);
+    if (targetIndex !== -1) {
+      const t = this.targets[targetIndex];
+      if (!t.isObstacle) {
+        this.combo++;
+        const punchBonus = 100 + this.combo * 20;
+        this.score += punchBonus;
+        this.sound.playPunch(300);
+        this.sound.playScoreChime();
+        this.createHitExplosion(t.mesh.position, 0x00f3ff, 20);
+        this.statusText.text = `💥 JAB HIT! +${punchBonus}`;
+      } else {
+        this.handlePlayerDamage('Punched a hazard bomb!');
+        this.createHitExplosion(t.mesh.position, 0xff0000, 24);
+      }
+
+      this.remove(t.mesh);
+      t.mesh.geometry.dispose();
+      this.targets.splice(targetIndex, 1);
+      this.updateHUD();
+    }
+  }
+
+  dispose() {
+    for (const t of this.targets) {
+      this.remove(t.mesh);
+      t.mesh.geometry?.dispose();
+    }
+    for (const p of this.particles) {
+      this.remove(p.mesh);
+      p.mesh.geometry?.dispose();
+    }
+  }
+}
+
+// Application entry point
+document.addEventListener('DOMContentLoaded', async () => {
+  const options = new xb.Options();
+  options.enableHands();
+  options.hands.visualization = true;
+  options.enableReticles();
+  options.simulator.defaultMode = xb.SimulatorMode.CONTROLLER;
+  options.setAppTitle('Spatial Puncher');
+  options.setAppDescription(
+    'Punch incoming target orbs with high-speed fists and dodge spiked obstacles!'
+  );
+
+  xb.add(new SpatialPuncherApp());
+  await xb.init(options);
+});
+    </script>
+  </body>
+</html>
