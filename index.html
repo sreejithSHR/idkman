@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Carnival Ball Pit Toss XR | XR Blocks</title>
+    <title>Ball Pit Target Toss XR | XR Blocks</title>
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1.0, user-scalable=no"
@@ -58,71 +58,48 @@
           const gain = this.ctx.createGain();
           const now = this.ctx.currentTime;
           osc.type = 'sine';
-          osc.frequency.setValueAtTime(240, now);
-          osc.frequency.exponentialRampToValueAtTime(740, now + 0.11);
-
-          gain.gain.setValueAtTime(0.22, now);
-          gain.gain.exponentialRampToValueAtTime(0.005, now + 0.11);
+          osc.frequency.setValueAtTime(260, now);
+          osc.frequency.exponentialRampToValueAtTime(800, now + 0.1);
+          gain.gain.setValueAtTime(0.2, now);
+          gain.gain.exponentialRampToValueAtTime(0.005, now + 0.1);
           osc.connect(gain);
           gain.connect(this.ctx.destination);
           osc.start(now);
-          osc.stop(now + 0.11);
+          osc.stop(now + 0.1);
         }
 
-        playHit(ringTier) {
+        playHit(tier) {
           this.initContext();
           if (!this.ctx) return;
           const now = this.ctx.currentTime;
           const osc = this.ctx.createOscillator();
           const gain = this.ctx.createGain();
-          const baseFreq = ringTier === 3 ? 1046 : ringTier === 2 ? 698 : 523;
-          osc.type = ringTier === 3 ? 'triangle' : 'sine';
+          const baseFreq = tier === 3 ? 1046 : tier === 2 ? 784 : 523;
+          osc.type = tier === 3 ? 'triangle' : 'sine';
           osc.frequency.setValueAtTime(baseFreq, now);
-          osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.4, now + 0.22);
-
-          gain.gain.setValueAtTime(0.3, now);
-          gain.gain.exponentialRampToValueAtTime(0.005, now + 0.25);
+          osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.5, now + 0.18);
+          gain.gain.setValueAtTime(0.25, now);
+          gain.gain.exponentialRampToValueAtTime(0.005, now + 0.2);
           osc.connect(gain);
           gain.connect(this.ctx.destination);
           osc.start(now);
-          osc.stop(now + 0.25);
+          osc.stop(now + 0.2);
         }
 
         playStart() {
           this.initContext();
           if (!this.ctx) return;
-          const chord = [392, 523.25, 659.25, 783.99];
-          chord.forEach((f, i) => {
-            const now = this.ctx.currentTime + i * 0.08;
+          [440, 554, 659, 880].forEach((freq, idx) => {
+            const now = this.ctx.currentTime + idx * 0.06;
             const osc = this.ctx.createOscillator();
             const gain = this.ctx.createGain();
-            osc.type = 'triangle';
-            osc.frequency.setValueAtTime(f, now);
-            gain.gain.setValueAtTime(0.18, now);
-            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
-            osc.connect(gain);
-            gain.connect(this.ctx.destination);
-            osc.start(now);
-            osc.stop(now + 0.25);
-          });
-        }
-
-        playStreak() {
-          this.initContext();
-          if (!this.ctx) return;
-          const notes = [587.33, 739.99, 880, 1174.66];
-          notes.forEach((freq, idx) => {
-            const now = this.ctx.currentTime + idx * 0.05;
-            const osc = this.ctx.createOscillator();
-            const gain = this.ctx.createGain();
-            osc.type = 'sine';
             osc.frequency.setValueAtTime(freq, now);
-            gain.gain.setValueAtTime(0.15, now);
-            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+            gain.gain.setValueAtTime(0.12, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
             osc.connect(gain);
             gain.connect(this.ctx.destination);
             osc.start(now);
-            osc.stop(now + 0.16);
+            osc.stop(now + 0.18);
           });
         }
       }
@@ -136,21 +113,19 @@
           this.shotsFired = 0;
           this.shotsHit = 0;
           this.streak = 0;
-          this.maxStreak = 0;
-
-          this.isPlaying = false;
-          this.gameTimeRemaining = 60.0;
-          this.roundDuration = 60.0;
+          this.throwSpeed = 13.5;
+          this.isPlaying = true;
+          this.roundTimeRemaining = 60.0;
 
           this.balls = [];
           this.targets = [];
           this.pitBalls = [];
           this.particles = [];
-          this.popups = [];
-
-          this.gravity = -8.2;
           this.lastThrowTime = 0;
-          this.throwCooldownMs = 140;
+          this.throwCooldownMs = 120;
+          this.controllersBound = new WeakSet();
+
+          this.inputMode = 'controller';
         }
 
         init() {
@@ -158,216 +133,244 @@
           this.buildEnvironment();
           this.buildBallPit();
           this.buildFreeFlowingTargets();
-          this.buildNearSpatialUi();
+          this.buildScoreCard();
           this.buildParticlePool();
+          this.setupFailSafeInputs();
         }
 
         setupLighting() {
-          const hemiLight = new THREE.HemisphereLight(0x223355, 0x070b14, 2.2);
+          const hemiLight = new THREE.HemisphereLight(0x334466, 0x080e18, 2.5);
           this.add(hemiLight);
 
-          const dirLight = new THREE.DirectionalLight(0xfff0dd, 2.6);
+          const dirLight = new THREE.DirectionalLight(0xfff8ee, 2.8);
           dirLight.position.set(2, 6, 2);
           dirLight.castShadow = true;
           this.add(dirLight);
 
-          const leftNeon = new THREE.PointLight(0x00f0ff, 2.2, 8);
-          leftNeon.position.set(-2.2, 1.8, -1.8);
-          this.add(leftNeon);
+          const cyanGlow = new THREE.PointLight(0x00f0ff, 2.5, 9);
+          cyanGlow.position.set(-2, 2, -2);
+          this.add(cyanGlow);
 
-          const rightNeon = new THREE.PointLight(0xff0066, 2.2, 8);
-          rightNeon.position.set(2.2, 1.8, -1.8);
-          this.add(rightNeon);
+          const pinkGlow = new THREE.PointLight(0xff0077, 2.5, 9);
+          pinkGlow.position.set(2, 2, -2);
+          this.add(pinkGlow);
         }
 
         buildEnvironment() {
-          this.envGroup = new THREE.Group();
-          this.envGroup.name = 'ArcadeEnvironment';
-          this.envGroup.xb = {pointerEvents: 'none'};
+          const env = new THREE.Group();
+          env.name = 'ArcadeEnvironment';
+          env.xb = {pointerEvents: 'none'};
 
-          // Ground floor grid
-          const grid = new THREE.GridHelper(30, 30, 0x00f5ff, 0x141e33);
-          grid.position.y = -0.01;
-          this.envGroup.add(grid);
-
-          const floorMat = new THREE.MeshStandardMaterial({
-            color: 0x080e1a,
-            roughness: 0.6,
-            metalness: 0.4,
+          // Elevated cyber circular player pod
+          const platformGeo = new THREE.CylinderGeometry(1.6, 1.8, 0.15, 32);
+          const platformMat = new THREE.MeshStandardMaterial({
+            color: 0x111928,
+            roughness: 0.4,
+            metalness: 0.6,
           });
-          const floor = new THREE.Mesh(new THREE.PlaneGeometry(36, 36), floorMat);
+          const platform = new THREE.Mesh(platformGeo, platformMat);
+          platform.position.y = -0.075;
+          env.add(platform);
+
+          const platformRingGeo = new THREE.TorusGeometry(1.62, 0.025, 16, 48);
+          platformRingGeo.rotateX(Math.PI / 2);
+          const platformRing = new THREE.Mesh(
+            platformRingGeo,
+            new THREE.MeshBasicMaterial({color: 0x00e1ff})
+          );
+          platformRing.position.y = 0.01;
+          env.add(platformRing);
+
+          // Deep arena floor grid
+          const grid = new THREE.GridHelper(32, 32, 0x00ffff, 0x142036);
+          grid.position.y = -0.01;
+          env.add(grid);
+
+          const floor = new THREE.Mesh(
+            new THREE.PlaneGeometry(36, 36),
+            new THREE.MeshStandardMaterial({color: 0x070b14, roughness: 0.8})
+          );
           floor.rotation.x = -Math.PI / 2;
           floor.position.y = -0.02;
-          floor.receiveShadow = true;
-          this.envGroup.add(floor);
+          env.add(floor);
 
-          // Atmospheric pillars framing the arena
-          const pillarGeo = new THREE.CylinderGeometry(0.12, 0.14, 5.5, 18);
+          // Neon boundary pillars
+          const pillarGeo = new THREE.CylinderGeometry(0.08, 0.1, 5, 16);
           const pillarMat = new THREE.MeshStandardMaterial({
-            color: 0x101726,
-            metalness: 0.7,
-            roughness: 0.25,
+            color: 0x151c2e,
+            metalness: 0.8,
+            roughness: 0.3,
           });
-          const pillarStops = [
-            [-3.2, 2.7, -4.5, 0x00e5ff],
-            [3.2, 2.7, -4.5, 0xff0077],
-            [-4.2, 2.7, -2.5, 0x9900ff],
-            [4.2, 2.7, -2.5, 0x00ff88],
+          const pillarLocations = [
+            [-3, 2.5, -4, 0x00f0ff],
+            [3, 2.5, -4, 0xff0066],
+            [-3.8, 2.5, -2, 0x00ff88],
+            [3.8, 2.5, -2, 0xffbb00],
           ];
 
-          pillarStops.forEach(([x, y, z, col]) => {
+          pillarLocations.forEach(([px, py, pz, color]) => {
             const p = new THREE.Mesh(pillarGeo, pillarMat);
-            p.position.set(x, y, z);
-            this.envGroup.add(p);
+            p.position.set(px, py, pz);
+            env.add(p);
 
             const strip = new THREE.Mesh(
-              new THREE.BoxGeometry(0.03, 5.2, 0.03),
-              new THREE.MeshBasicMaterial({color: col})
+              new THREE.BoxGeometry(0.02, 4.8, 0.02),
+              new THREE.MeshBasicMaterial({color})
             );
-            strip.position.set(x + (x < 0 ? 0.12 : -0.12), y, z);
-            this.envGroup.add(strip);
+            strip.position.set(px, py, pz + 0.09);
+            env.add(strip);
           });
 
-          this.add(this.envGroup);
+          this.add(env);
         }
 
         buildBallPit() {
           this.pitGroup = new THREE.Group();
           this.pitGroup.position.set(0, 0, -0.65);
-          this.pitGroup.xb = {pointerEvents: 'none'};
+          // Enable direct clicking/tapping on the ball pit to throw balls!
+          this.pitGroup.xb = {pointerEvents: 'auto'};
 
-          // Basin tub outer body
-          const tubOuterGeo = new THREE.CylinderGeometry(0.56, 0.52, 0.5, 36, 1, true);
+          // Tub Outer Wall
+          const tubGeo = new THREE.CylinderGeometry(0.55, 0.5, 0.48, 32, 1, true);
           const tubMat = new THREE.MeshStandardMaterial({
-            color: 0x151f33,
-            roughness: 0.35,
-            metalness: 0.6,
+            color: 0x131a2b,
+            roughness: 0.4,
+            metalness: 0.7,
             side: THREE.DoubleSide,
           });
-          const tub = new THREE.Mesh(tubOuterGeo, tubMat);
-          tub.position.y = 0.5;
+          const tub = new THREE.Mesh(tubGeo, tubMat);
+          tub.position.y = 0.52;
           this.pitGroup.add(tub);
 
-          // Glowing rim ring around top
-          const rimGeo = new THREE.TorusGeometry(0.56, 0.03, 16, 48);
+          // Glowing basin rim
+          const rimGeo = new THREE.TorusGeometry(0.55, 0.035, 16, 48);
           rimGeo.rotateX(Math.PI / 2);
-          const rimMat = new THREE.MeshBasicMaterial({color: 0x00f0ff});
-          const rim = new THREE.Mesh(rimGeo, rimMat);
-          rim.position.y = 0.75;
+          const rim = new THREE.Mesh(
+            rimGeo,
+            new THREE.MeshBasicMaterial({color: 0x00e1ff})
+          );
+          rim.position.y = 0.76;
           this.pitGroup.add(rim);
 
-          // Ball pit underglow light
+          // Inner basin glow light
           const pitLight = new THREE.PointLight(0x00d9ff, 1.8, 1.5);
           pitLight.position.set(0, 0.7, 0);
           this.pitGroup.add(pitLight);
 
-          // Populate pit with vibrant bobbing spheres
-          const sphereGeo = new THREE.SphereGeometry(0.048, 16, 16);
-          const colors = [
-            0xff3344, 0x00d5ff, 0xffb700, 0x00ff77, 0xaa00ff, 0xff0088,
+          // Clickable interaction zone inside the pit
+          const sensorGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.25, 20);
+          const sensorMat = new THREE.MeshBasicMaterial({
+            transparent: true,
+            opacity: 0,
+          });
+          const pitSensor = new THREE.Mesh(sensorGeo, sensorMat);
+          pitSensor.position.y = 0.65;
+          pitSensor.name = 'BallPitSensor';
+          this.pitGroup.add(pitSensor);
+
+          // Vibrant floating balls inside the pit
+          const sphereGeo = new THREE.SphereGeometry(0.048, 14, 14);
+          const ballColors = [
+            0xff3355, 0x00d5ff, 0xffbb00, 0x00ff77, 0xaa00ff, 0xff0088,
           ];
-          const ballMaterials = colors.map(
+          const ballMats = ballColors.map(
             (c) =>
               new THREE.MeshStandardMaterial({
                 color: c,
                 roughness: 0.25,
-                metalness: 0.2,
+                metalness: 0.25,
                 emissive: c,
                 emissiveIntensity: 0.15,
               })
           );
 
-          const pitBallCount = 48;
-          for (let i = 0; i < pitBallCount; i++) {
+          for (let i = 0; i < 46; i++) {
             const angle = Math.random() * Math.PI * 2;
             const r = Math.sqrt(Math.random()) * 0.44;
             const x = Math.cos(angle) * r;
             const z = Math.sin(angle) * r;
-            const y = 0.66 + (Math.random() - 0.5) * 0.08;
+            const y = 0.65 + (Math.random() - 0.5) * 0.08;
 
-            const mat = ballMaterials[i % ballMaterials.length];
-            const ballMesh = new THREE.Mesh(sphereGeo, mat);
-            ballMesh.position.set(x, y, z);
-            ballMesh.userData = {
+            const bMesh = new THREE.Mesh(sphereGeo, ballMats[i % ballMats.length]);
+            bMesh.position.set(x, y, z);
+            bMesh.userData = {
               baseY: y,
               phase: Math.random() * Math.PI * 2,
               speed: 1.5 + Math.random() * 2.0,
             };
-            this.pitGroup.add(ballMesh);
-            this.pitBalls.push(ballMesh);
+            this.pitGroup.add(bMesh);
+            this.pitBalls.push(bMesh);
           }
 
           this.add(this.pitGroup);
         }
 
         buildFreeFlowingTargets() {
-          // 4 distinct targets flowing along multi-dimensional continuous curves
-          const flowConfigs = [
+          const configs = [
             {
               id: 0,
-              name: 'Cyan Cruiser',
               scale: 0.95,
-              baseCenter: new THREE.Vector3(0, 1.6, -2.5),
-              freq: new THREE.Vector3(0.65, 0.9, 0.45),
-              amp: new THREE.Vector3(1.4, 0.45, 0.6),
+              baseCenter: new THREE.Vector3(0, 1.55, -2.6),
+              freq: new THREE.Vector3(0.7, 0.9, 0.5),
+              amp: new THREE.Vector3(1.3, 0.45, 0.6),
               phase: 0.0,
+              color: 0x00e1ff,
             },
             {
               id: 1,
-              name: 'Magenta Sweeper',
               scale: 0.85,
-              baseCenter: new THREE.Vector3(-0.6, 1.85, -3.2),
-              freq: new THREE.Vector3(0.85, 1.2, 0.7),
-              amp: new THREE.Vector3(1.2, 0.65, 0.8),
-              phase: 1.8,
+              baseCenter: new THREE.Vector3(-0.8, 1.85, -3.2),
+              freq: new THREE.Vector3(0.9, 1.2, 0.7),
+              amp: new THREE.Vector3(1.2, 0.6, 0.8),
+              phase: 1.7,
+              color: 0xff0077,
             },
             {
               id: 2,
-              name: 'Solar Looper',
               scale: 0.9,
-              baseCenter: new THREE.Vector3(0.7, 1.5, -3.0),
-              freq: new THREE.Vector3(0.5, 0.8, 1.1),
-              amp: new THREE.Vector3(1.6, 0.55, 0.7),
-              phase: 3.5,
+              baseCenter: new THREE.Vector3(0.8, 1.45, -3.0),
+              freq: new THREE.Vector3(0.6, 0.8, 1.0),
+              amp: new THREE.Vector3(1.5, 0.5, 0.7),
+              phase: 3.4,
+              color: 0xffbb00,
             },
             {
               id: 3,
-              name: 'Acrobatic Ace',
-              scale: 0.7,
-              baseCenter: new THREE.Vector3(0, 2.1, -3.8),
-              freq: new THREE.Vector3(1.1, 1.4, 0.9),
-              amp: new THREE.Vector3(1.8, 0.7, 0.9),
-              phase: 5.1,
+              scale: 0.72,
+              baseCenter: new THREE.Vector3(0, 2.05, -3.8),
+              freq: new THREE.Vector3(1.1, 1.3, 0.8),
+              amp: new THREE.Vector3(1.7, 0.65, 0.9),
+              phase: 5.0,
+              color: 0x00ff88,
             },
           ];
 
-          flowConfigs.forEach((cfg) => {
-            const target = this.createTargetMesh(cfg.scale, cfg.id);
-            target.userData = {
+          configs.forEach((cfg) => {
+            const targetMesh = this.createTargetMesh(cfg.scale, cfg.color);
+            targetMesh.userData = {
               ...cfg,
               wobble: 0,
-              wobbleVec: new THREE.Vector3(),
             };
-            target.position.copy(cfg.baseCenter);
-            this.add(target);
-            this.targets.push(target);
+            targetMesh.position.copy(cfg.baseCenter);
+            this.add(targetMesh);
+            this.targets.push(targetMesh);
           });
         }
 
-        createTargetMesh(scaleFactor = 1.0, id = 0) {
+        createTargetMesh(scaleFactor, accentColor) {
           const group = new THREE.Group();
-          group.name = `FreeFlowTarget_${id}`;
+          group.name = 'MovingTarget';
 
           // Outer Ring (25 pts)
           const outerGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.025, 36);
           outerGeo.rotateX(Math.PI / 2);
           const outerMat = new THREE.MeshStandardMaterial({
-            color: id % 2 === 0 ? 0x0088ff : 0xaa00cc,
+            color: 0x18243b,
             roughness: 0.3,
-            metalness: 0.3,
+            metalness: 0.4,
           });
-          const outerMesh = new THREE.Mesh(outerGeo, outerMat);
-          group.add(outerMesh);
+          const outer = new THREE.Mesh(outerGeo, outerMat);
+          group.add(outer);
 
           // Middle Ring (50 pts)
           const midGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.03, 36);
@@ -377,11 +380,11 @@
             roughness: 0.25,
             metalness: 0.2,
           });
-          const midMesh = new THREE.Mesh(midGeo, midMat);
-          midMesh.position.z = 0.005;
-          group.add(midMesh);
+          const mid = new THREE.Mesh(midGeo, midMat);
+          mid.position.z = 0.005;
+          group.add(mid);
 
-          // Bullseye (100 pts)
+          // Center Bullseye (100 pts)
           const bullGeo = new THREE.CylinderGeometry(0.1, 0.1, 0.035, 36);
           bullGeo.rotateX(Math.PI / 2);
           const bullMat = new THREE.MeshStandardMaterial({
@@ -391,15 +394,13 @@
             emissive: 0x553300,
             emissiveIntensity: 0.4,
           });
-          const bullMesh = new THREE.Mesh(bullGeo, bullMat);
-          bullMesh.position.z = 0.01;
-          group.add(bullMesh);
+          const bull = new THREE.Mesh(bullGeo, bullMat);
+          bull.position.z = 0.01;
+          group.add(bull);
 
-          // Holographic glowing halo
-          const haloGeo = new THREE.TorusGeometry(0.36, 0.012, 16, 48);
-          const haloMat = new THREE.MeshBasicMaterial({
-            color: id % 2 === 0 ? 0x00f0ff : 0xff00aa,
-          });
+          // Exterior glowing halo
+          const haloGeo = new THREE.TorusGeometry(0.355, 0.012, 16, 48);
+          const haloMat = new THREE.MeshBasicMaterial({color: accentColor});
           const halo = new THREE.Mesh(haloGeo, haloMat);
           group.add(halo);
 
@@ -407,66 +408,105 @@
           return group;
         }
 
-        buildNearSpatialUi() {
-          // Large digital score counter
-          this.scoreDisplay = new xb.UIText({
+        buildScoreCard() {
+          // Large digital score readouts
+          this.scoreText = new xb.UIText({
             text: 'SCORE: 0',
             style: {
-              fontSize: 28,
+              fontSize: 26,
               fontWeight: 'bold',
               color: '#00ffff',
               textAlign: 'center',
             },
           });
 
-          this.timerDisplay = new xb.UIText({
-            text: 'TIME: 60s',
+          this.statsText = new xb.UIText({
+            text: 'High: 0  |  Acc: 100%  |  Hits: 0/0',
             style: {
-              fontSize: 20,
-              fontWeight: 'bold',
-              color: '#ffcc00',
-              textAlign: 'center',
-            },
-          });
-
-          this.streakDisplay = new xb.UIText({
-            text: 'Ready to throw! Press START.',
-            style: {
-              fontSize: 16,
+              fontSize: 14,
               opacity: 0.85,
               textAlign: 'center',
             },
           });
 
-          this.startButton = new xb.UIButton({
-            label: 'START GAME',
-            icon: 'play_arrow',
+          this.timerText = new xb.UIText({
+            text: 'TIME REMAINING: 60s',
             style: {
-              width: '100%',
-              height: 48,
-              backgroundColor: '#00cc66',
+              fontSize: 16,
               fontWeight: 'bold',
+              color: '#ffbb00',
+              textAlign: 'center',
             },
-            onClick: () => this.toggleGame(),
           });
 
-          // Placed directly in front of player, mounted on the front rim of the ball pit
-          this.controlPanel = new xb.UICard({
-            size: {width: 0.46, height: 'auto'},
-            manipulation: false,
-            edge: false,
+          this.streakText = new xb.UIText({
+            text: 'Ready to throw! Aim and fire!',
+            style: {
+              fontSize: 15,
+              color: '#00ff88',
+              textAlign: 'center',
+            },
+          });
+
+          // Throw speed slider
+          this.speedLabel = new xb.UIText({
+            text: 'Throw Power: 13.5 m/s',
+            style: {fontSize: 14},
+          });
+
+          const speedSlider = new xb.UISlider({
+            min: 8,
+            max: 20,
+            step: 0.5,
+            value: 13.5,
+            style: {width: '100%', height: 32},
+            onInput: (val) => {
+              this.throwSpeed = val;
+              this.speedLabel.text = `Throw Power: ${val.toFixed(1)} m/s`;
+            },
+          });
+
+          // Controller / Hand mode toggle
+          this.modeButton = new xb.UIButton({
+            label: 'Mode: Controller',
+            icon: 'sports_esports',
+            style: {flexGrow: 1, height: 42, backgroundColor: '#203050'},
+            onClick: () => this.toggleInputMode(),
+          });
+
+          // Instant Throw button
+          const quickThrowBtn = new xb.UIButton({
+            label: 'TOSS BALL',
+            icon: 'sports_baseball',
+            style: {flexGrow: 1, height: 42, backgroundColor: '#00a855'},
+            onClick: () => this.throwBallFromView(),
+          });
+
+          // Start / Reset button
+          this.restartBtn = new xb.UIButton({
+            label: 'RESTART ROUND',
+            icon: 'restart_alt',
+            style: {width: '100%', height: 42, backgroundColor: '#cc3355'},
+            onClick: () => this.resetGame(),
+          });
+
+          // Main Spatial Card container
+          this.scoreCard = new xb.UICard({
+            size: {width: 0.52, height: 'auto'},
+            manipulation: true,
+            edge: true,
             style: {
               flexDirection: 'column',
-              gap: 8,
-              padding: 14,
-              backgroundColor: 'rgba(9, 14, 26, 0.94)',
+              gap: 10,
+              padding: 16,
+              backgroundColor: 'rgba(10, 16, 30, 0.95)',
               borderColor: '#00d5ff',
               borderWidth: 2,
-              borderRadius: 18,
+              borderRadius: 20,
             },
             children: [
               new xb.UIText({
-                text: 'TARGET TOSS XR',
+                text: '🏆 ARCADE SCOREBOARD',
                 style: {
                   fontSize: 18,
                   fontWeight: 'bold',
@@ -475,60 +515,151 @@
                   textAlign: 'center',
                 },
               }),
-              this.scoreDisplay,
-              this.timerDisplay,
-              this.streakDisplay,
-              this.startButton,
+              this.scoreText,
+              this.statsText,
+              this.timerText,
+              this.streakText,
+              new xb.UIPanel({
+                style: {width: '100%', flexDirection: 'column', gap: 4},
+                children: [this.speedLabel, speedSlider],
+              }),
+              new xb.UIPanel({
+                style: {width: '100%', flexDirection: 'row', gap: 8},
+                children: [this.modeButton, quickThrowBtn],
+              }),
+              this.restartBtn,
             ],
           });
 
-          // Positioned within direct arm reach (z = -0.56m, chest-level) tilted up towards face
-          this.controlPanel.position.set(0, 1.12, -0.56);
-          this.controlPanel.rotation.x = -0.32;
-          this.add(this.controlPanel);
+          // Position card at comfortable reading height right next to the pit
+          this.scoreCard.position.set(0.58, 1.25, -0.85);
+          this.scoreCard.rotation.y = -0.32;
+          this.add(this.scoreCard);
         }
 
-        toggleGame() {
-          if (!this.isPlaying) {
-            this.startGame();
+        toggleInputMode() {
+          if (this.inputMode === 'controller') {
+            this.inputMode = 'hands';
+            this.modeButton.label = 'Mode: Hands';
+            this.modeButton.icon = 'back_hand';
+            xb.core.simulator?.setMode?.(xb.SimulatorMode.POSE);
           } else {
-            this.stopGame();
+            this.inputMode = 'controller';
+            this.modeButton.label = 'Mode: Controller';
+            this.modeButton.icon = 'sports_esports';
+            xb.core.simulator?.setMode?.(xb.SimulatorMode.CONTROLLER);
           }
         }
 
-        startGame() {
-          this.isPlaying = true;
-          this.score = 0;
-          this.shotsFired = 0;
-          this.shotsHit = 0;
-          this.streak = 0;
-          this.gameTimeRemaining = this.roundDuration;
+        setupFailSafeInputs() {
+          // 1. Desktop & Mobile Touch tap anywhere on canvas
+          window.addEventListener('pointerdown', (e) => {
+            // Ignore clicks directly targeting UI HTML elements if any
+            if (e.target && e.target.tagName === 'BUTTON') return;
+            const now = performance.now();
+            if (now - this.lastThrowTime < this.throwCooldownMs) return;
 
-          this.startButton.label = 'STOP GAME';
-          this.startButton.icon = 'stop';
-          this.startButton.style.backgroundColor = '#cc2244';
+            // Direct throw targeting through cursor raycast
+            const mouse = new THREE.Vector2(
+              (e.clientX / window.innerWidth) * 2 - 1,
+              -(e.clientY / window.innerHeight) * 2 + 1
+            );
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(mouse, xb.core.camera);
+            const dir = raycaster.ray.direction.clone().normalize();
 
-          this.sfx.playStart();
-          this.updateUiTexts();
+            const origin = xb.core.camera.position.clone();
+            origin.addScaledVector(dir, 0.3);
+            origin.y -= 0.1;
+
+            this.throwBall(origin, dir.multiplyScalar(this.throwSpeed));
+          });
+
+          // 2. Keyboard Spacebar shortcut
+          window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+              this.throwBallFromView();
+            }
+          });
         }
 
-        stopGame() {
-          this.isPlaying = false;
-          this.startButton.label = 'START GAME';
-          this.startButton.icon = 'play_arrow';
-          this.startButton.style.backgroundColor = '#00cc66';
+        bindController(controller) {
+          if (this.controllersBound.has(controller)) return;
+          this.controllersBound.add(controller);
 
-          const acc =
-            this.shotsFired > 0
-              ? Math.round((this.shotsHit / this.shotsFired) * 100)
-              : 0;
-          this.streakDisplay.text = `Final: ${this.score} pts (${acc}% Acc)`;
+          controller.addEventListener('selectstart', () => {
+            const origin = new THREE.Vector3();
+            controller.getWorldPosition(origin);
+
+            const forward = new THREE.Vector3(0, 0, -1)
+              .applyQuaternion(controller.quaternion)
+              .normalize();
+
+            // Give a slight loft arc
+            forward.y += 0.08;
+            forward.normalize();
+
+            this.throwBall(origin, forward.multiplyScalar(this.throwSpeed));
+          });
+        }
+
+        throwBallFromView() {
+          const now = performance.now();
+          if (now - this.lastThrowTime < this.throwCooldownMs) return;
+
+          const origin = new THREE.Vector3();
+          xb.core.camera.getWorldPosition(origin);
+
+          const forward = new THREE.Vector3(0, 0, -1)
+            .applyQuaternion(xb.core.camera.quaternion)
+            .normalize();
+
+          origin.addScaledVector(forward, 0.35);
+          origin.y -= 0.12;
+
+          forward.y += 0.08;
+          forward.normalize();
+
+          this.throwBall(origin, forward.multiplyScalar(this.throwSpeed));
+        }
+
+        throwBall(position, velocity) {
+          this.lastThrowTime = performance.now();
+          this.shotsFired++;
+
+          const radius = 0.065;
+          const colors = [
+            0xff2255, 0x00e1ff, 0xffbb00, 0x00ff88, 0xbb00ff, 0xff6600,
+          ];
+          const color = colors[this.shotsFired % colors.length];
+
+          const ball = new THREE.Mesh(
+            new THREE.SphereGeometry(radius, 20, 20),
+            new THREE.MeshStandardMaterial({
+              color,
+              roughness: 0.2,
+              metalness: 0.3,
+              emissive: color,
+              emissiveIntensity: 0.25,
+            })
+          );
+          ball.position.copy(position);
+          ball.userData = {
+            velocity: velocity.clone(),
+            radius,
+            life: 0,
+            maxLife: 3.5,
+          };
+          this.add(ball);
+          this.balls.push(ball);
+
+          this.sfx.playThrow();
+          this.updateUi();
         }
 
         buildParticlePool() {
-          const count = 70;
           const geo = new THREE.SphereGeometry(0.02, 6, 6);
-          for (let i = 0; i < count; i++) {
+          for (let i = 0; i < 60; i++) {
             const p = new THREE.Mesh(
               geo,
               new THREE.MeshBasicMaterial({
@@ -565,230 +696,152 @@
           }
         }
 
-        onSelectStart(event) {
-          const now = performance.now();
-          if (now - this.lastThrowTime < this.throwCooldownMs) return;
-          this.lastThrowTime = now;
-
-          // Auto-start round on first throw if stopped
-          if (!this.isPlaying) {
-            this.startGame();
-          }
-
-          const controller = event.source?.controller;
-          let origin = new THREE.Vector3();
-          let forward = new THREE.Vector3(0, 0, -1);
-
-          if (controller) {
-            controller.getWorldPosition(origin);
-            forward.applyQuaternion(controller.quaternion).normalize();
-            origin.addScaledVector(forward, 0.08);
-          } else {
-            // Desktop simulator fallback via camera
-            xb.core.camera.getWorldPosition(origin);
-            forward = new THREE.Vector3(0, 0, -1)
-              .applyQuaternion(xb.core.camera.quaternion)
-              .normalize();
-            origin.addScaledVector(forward, 0.25);
-            origin.y -= 0.12;
-          }
-
-          // Launch velocity with an arcade arc
-          const speed = 13.2;
-          const launchDir = forward.clone();
-          launchDir.y += 0.09;
-          launchDir.normalize();
-
-          const velocity = launchDir.multiplyScalar(speed);
-          this.createBall(origin, velocity);
-
-          this.shotsFired++;
-          this.sfx.playThrow();
-          this.updateUiTexts();
-        }
-
-        createBall(position, velocity) {
-          const radius = 0.065;
-          const ballColors = [
-            0xff2255, 0x00e1ff, 0xffbb00, 0x00ff88, 0xbb00ff, 0xff6600,
-          ];
-          const color = ballColors[this.shotsFired % ballColors.length];
-
-          const ball = new THREE.Mesh(
-            new THREE.SphereGeometry(radius, 22, 22),
-            new THREE.MeshStandardMaterial({
-              color,
-              roughness: 0.2,
-              metalness: 0.25,
-              emissive: color,
-              emissiveIntensity: 0.2,
-            })
-          );
-
-          ball.position.copy(position);
-          ball.userData = {
-            velocity: velocity.clone(),
-            radius,
-            active: true,
-            life: 0,
-            maxLife: 3.5,
-          };
-          this.add(ball);
-          this.balls.push(ball);
-        }
-
         update(delta) {
           super.update?.(delta);
           const dt = Math.min(delta || 0.016, 0.05);
           const time = performance.now() * 0.001;
 
-          // Timer countdown
-          if (this.isPlaying) {
-            this.gameTimeRemaining = Math.max(0, this.gameTimeRemaining - dt);
-            if (this.gameTimeRemaining <= 0) {
-              this.stopGame();
+          // Continuously bind any newly connected WebXR controllers
+          if (xb.core.input?.controllers) {
+            for (const c of xb.core.input.controllers) {
+              this.bindController(c);
             }
-            this.timerDisplay.text = `TIME: ${Math.ceil(this.gameTimeRemaining)}s`;
           }
 
-          // Animate bobbing pit balls
+          // Timer logic
+          if (this.isPlaying) {
+            this.roundTimeRemaining = Math.max(0, this.roundTimeRemaining - dt);
+            if (this.roundTimeRemaining <= 0) {
+              this.isPlaying = false;
+              this.streakText.text = 'Round Complete! Press RESTART.';
+            }
+            this.timerText.text = `TIME REMAINING: ${Math.ceil(this.roundTimeRemaining)}s`;
+          }
+
+          // Animate pit bobbing balls
           this.pitBalls.forEach((b) => {
-            const data = b.userData;
             b.position.y =
-              data.baseY + Math.sin(time * data.speed + data.phase) * 0.02;
+              b.userData.baseY +
+              Math.sin(time * b.userData.speed + b.userData.phase) * 0.018;
           });
 
-          this.updateFreeFlowingTargets(time, dt);
+          this.updateTargets(time, dt);
           this.updateBalls(dt);
           this.updateParticles(dt);
         }
 
-        updateFreeFlowingTargets(time, dt) {
+        updateTargets(time, dt) {
           this.targets.forEach((target) => {
             const d = target.userData;
+            const t = time * 0.95 + d.phase;
 
-            // Free-flowing parametric 3D space curves
-            const t = time * 0.9 + d.phase;
-            const x =
-              d.baseCenter.x + Math.sin(t * d.freq.x) * d.amp.x;
-            const y =
-              d.baseCenter.y + Math.cos(t * d.freq.y) * d.amp.y;
-            const z =
-              d.baseCenter.z + Math.sin(t * d.freq.z) * d.amp.z;
+            const x = d.baseCenter.x + Math.sin(t * d.freq.x) * d.amp.x;
+            const y = d.baseCenter.y + Math.cos(t * d.freq.y) * d.amp.y;
+            const z = d.baseCenter.z + Math.sin(t * d.freq.z) * d.amp.z;
 
             target.position.set(x, y, z);
 
-            // Compute tangent velocity for natural banking and pitch
+            // Compute velocities for natural bank rotation
             const vx = Math.cos(t * d.freq.x) * d.amp.x * d.freq.x;
             const vy = -Math.sin(t * d.freq.y) * d.amp.y * d.freq.y;
 
-            // Bank roll into turns, pitch along elevation changes
             target.rotation.z = -vx * 0.35;
             target.rotation.x = vy * 0.25;
             target.rotation.y = Math.sin(t * 0.5) * 0.2;
 
-            // Wobble decay after being struck
             if (d.wobble > 0) {
-              d.wobble = Math.max(0, d.wobble - dt * 4.0);
-              const wobbleScale =
-                1.0 + Math.sin(d.wobble * Math.PI * 4) * 0.28 * d.wobble;
-              target.scale.setScalar(d.scale * wobbleScale);
+              d.wobble = Math.max(0, d.wobble - dt * 3.5);
+              const scaleMod =
+                1.0 + Math.sin(d.wobble * Math.PI * 4) * 0.25 * d.wobble;
+              target.scale.setScalar(d.scale * scaleMod);
             }
           });
         }
 
         updateBalls(dt) {
+          const gravity = -8.5;
           for (let i = this.balls.length - 1; i >= 0; i--) {
             const ball = this.balls[i];
             const d = ball.userData;
 
             d.life += dt;
-            if (!d.active || d.life > d.maxLife) {
+            if (d.life > d.maxLife) {
               this.removeBall(ball, i);
               continue;
             }
 
-            d.velocity.y += this.gravity * dt;
+            d.velocity.y += gravity * dt;
             ball.position.addScaledVector(d.velocity, dt);
 
-            ball.rotation.x += d.velocity.z * dt * 2.5;
-            ball.rotation.y += d.velocity.x * dt * 2.5;
+            ball.rotation.x += d.velocity.z * dt * 2;
+            ball.rotation.y += d.velocity.x * dt * 2;
 
-            // Check collision with free-flowing targets
-            let hitOccurred = false;
+            // Target collision check
+            let hit = false;
             for (const target of this.targets) {
-              const targetRadius = 0.35 * target.userData.scale;
+              const radius = 0.35 * target.userData.scale;
               const dist = ball.position.distanceTo(target.position);
 
-              if (dist < targetRadius + d.radius) {
-                const relativeHitDist = dist / target.userData.scale;
-                let points = 25;
+              if (dist < radius + d.radius) {
+                const relativeDist = dist / target.userData.scale;
+                let pts = 25;
                 let tier = 1;
                 let sparkColor = 0x00d5ff;
 
-                if (relativeHitDist <= 0.12) {
-                  points = 100;
+                if (relativeDist <= 0.12) {
+                  pts = 100;
                   tier = 3;
                   sparkColor = 0xffd700;
-                } else if (relativeHitDist <= 0.24) {
-                  points = 50;
+                } else if (relativeDist <= 0.24) {
+                  pts = 50;
                   tier = 2;
-                  sparkColor = 0xff2255;
+                  sparkColor = 0xff3b30;
                 }
 
-                this.onTargetHit(target, ball.position, points, tier, sparkColor);
-                hitOccurred = true;
+                this.onTargetHit(target, ball.position, pts, tier, sparkColor);
+                hit = true;
                 break;
               }
             }
 
-            if (hitOccurred) {
+            if (hit) {
               this.removeBall(ball, i);
               continue;
             }
 
-            // Floor drop
-            if (ball.position.y < -0.15) {
+            // Floor contact
+            if (ball.position.y < -0.1) {
               this.streak = 0;
-              this.updateUiTexts();
+              this.updateUi();
               this.removeBall(ball, i);
             }
           }
         }
 
-        onTargetHit(target, hitPos, basePoints, tier, color) {
+        onTargetHit(target, hitPos, basePts, tier, color) {
           this.shotsHit++;
           this.streak++;
-          if (this.streak > this.maxStreak) this.maxStreak = this.streak;
-
-          const streakMult = Math.min(4, 1 + Math.floor((this.streak - 1) / 3));
-          const earned = basePoints * streakMult;
+          const multiplier = Math.min(4, 1 + Math.floor((this.streak - 1) / 3));
+          const earned = basePts * multiplier;
           this.score += earned;
           if (this.score > this.highScore) this.highScore = this.score;
 
           target.userData.wobble = 1.0;
           this.spawnSparks(hitPos, color, tier === 3 ? 24 : 14);
+          this.sfx.playHit(tier);
 
-          if (this.streak > 1 && this.streak % 3 === 0) {
-            this.sfx.playStreak();
-          } else {
-            this.sfx.playHit(tier);
-          }
+          this.streakText.text =
+            this.streak > 1
+              ? `🔥 ${this.streak}x STREAK! (x${multiplier} Mult)`
+              : `🎯 HIT! +${earned} pts!`;
 
-          this.updateUiTexts();
-        }
-
-        removeBall(ball, index) {
-          this.remove(ball);
-          ball.geometry.dispose();
-          ball.material.dispose();
-          this.balls.splice(index, 1);
+          this.updateUi();
         }
 
         updateParticles(dt) {
           for (const p of this.particles) {
             if (!p.userData.active) continue;
-            p.userData.life -= dt * 2.0;
+            p.userData.life -= dt * 2.2;
             if (p.userData.life <= 0) {
               p.userData.active = false;
               p.visible = false;
@@ -801,35 +854,60 @@
           }
         }
 
-        updateUiTexts() {
-          this.scoreDisplay.text = `SCORE: ${this.score}`;
-          const streakMsg =
-            this.streak > 1
-              ? `🔥 ${this.streak}x STREAK! (x${Math.min(4, 1 + Math.floor((this.streak - 1) / 3))} Mult)`
-              : `Hits: ${this.shotsHit}/${this.shotsFired}`;
-          this.streakDisplay.text = streakMsg;
+        updateUi() {
+          this.scoreText.text = `SCORE: ${this.score}`;
+          const acc =
+            this.shotsFired > 0
+              ? Math.round((this.shotsHit / this.shotsFired) * 100)
+              : 100;
+          this.statsText.text = `High: ${this.highScore}  |  Acc: ${acc}%  |  Hits: ${this.shotsHit}/${this.shotsFired}`;
+        }
+
+        resetGame() {
+          this.score = 0;
+          this.shotsFired = 0;
+          this.shotsHit = 0;
+          this.streak = 0;
+          this.roundTimeRemaining = 60.0;
+          this.isPlaying = true;
+          this.sfx.playStart();
+          this.streakText.text = 'Game Reset! Aim and fire!';
+          this.updateUi();
+        }
+
+        removeBall(ball, index) {
+          this.remove(ball);
+          ball.geometry.dispose();
+          ball.material.dispose();
+          this.balls.splice(index, 1);
         }
 
         dispose() {
           for (let i = this.balls.length - 1; i >= 0; i--) {
             this.removeBall(this.balls[i], i);
           }
-          this.particles.forEach((p) => {
-            p.geometry.dispose();
-            p.material.dispose();
-          });
         }
       }
 
       document.addEventListener('DOMContentLoaded', () => {
         const options = new xb.Options();
-        options.setAppTitle('Ball Toss XR');
+        options.setAppTitle('Ball Pit Target Toss XR');
         options.setAppDescription(
-          'Physical ball pit toss with arm-reach start controls and free-flowing 3D targets.'
+          'Throw balls at free-flowing 3D targets. Features Spatial Scoreboard, Hand Tracking, and Controller support.'
         );
-        options.reticles.enabled = true;
+
+        // Enable Hand Tracking & Visualization
         options.enableHands();
         options.hands.visualization = true;
+        options.hands.visualizeJoints = true;
+        options.hands.visualizeMeshes = true;
+        options.enableGestures();
+
+        // Enable Reticles & Input
+        options.enableReticles();
+        options.interaction.raycastMode = 'select';
+        options.simulator.defaultMode = xb.SimulatorMode.CONTROLLER;
+        options.xrButton.showEnterSimulatorButton = true;
 
         xb.add(new BallThrowGame());
         xb.init(options);
