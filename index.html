@@ -12,7 +12,7 @@
       rel="stylesheet"
       href="https://xrblocks.github.io/css/xr.css"
     />
-    <!-- Cannon.js for authentic, robust 3D physics simulation -->
+    <!-- Cannon.js for authentic rigid-body physics -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script>
       window.litDisableBundleWarning = true;
@@ -41,25 +41,83 @@
         overflow: hidden;
         user-select: none;
         -webkit-user-select: none;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       }
       #crosshair {
         position: absolute;
         top: 50%;
         left: 50%;
         transform: translate(-50%, -50%);
-        width: 14px;
-        height: 14px;
-        border: 2px solid rgba(255, 255, 255, 0.7);
+        width: 12px;
+        height: 12px;
+        border: 2px solid rgba(255, 255, 255, 0.75);
         border-radius: 50%;
         pointer-events: none;
         z-index: 100;
-        box-shadow: 0 0 6px rgba(0, 0, 0, 0.5);
+        box-shadow: 0 0 6px rgba(0, 0, 0, 0.6);
+      }
+      #hud-controls {
+        position: absolute;
+        bottom: 24px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 12px;
+        z-index: 1000;
+        background: rgba(15, 23, 42, 0.88);
+        padding: 10px 16px;
+        border-radius: 16px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        backdrop-filter: blur(8px);
+      }
+      .hud-btn {
+        background: linear-gradient(135deg, #2563eb, #1d4ed8);
+        color: #ffffff;
+        border: none;
+        padding: 10px 18px;
+        border-radius: 10px;
+        font-size: 14px;
+        font-weight: 700;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        transition: transform 0.1s ease, background 0.2s ease;
+        box-shadow: 0 4px 10px rgba(37, 99, 235, 0.35);
+      }
+      .hud-btn:hover {
+        background: linear-gradient(135deg, #3b82f6, #2563eb);
+        transform: translateY(-2px);
+      }
+      .hud-btn:active {
+        transform: translateY(1px);
+      }
+      .hud-btn.reset-btn {
+        background: linear-gradient(135deg, #dc2626, #b91c1c);
+        box-shadow: 0 4px 10px rgba(220, 38, 38, 0.35);
+      }
+      .hud-btn.reset-btn:hover {
+        background: linear-gradient(135deg, #ef4444, #dc2626);
+      }
+      .hud-btn.toss-btn {
+        background: linear-gradient(135deg, #059669, #047857);
+        box-shadow: 0 4px 10px rgba(5, 150, 105, 0.35);
+      }
+      .hud-btn.toss-btn:hover {
+        background: linear-gradient(135deg, #10b981, #059669);
       }
     </style>
   </head>
 
   <body>
     <div id="crosshair"></div>
+    <div id="hud-controls">
+      <button id="btn-start" class="hud-btn">▶ Start Game</button>
+      <button id="btn-toss" class="hud-btn toss-btn">⚾ Toss Ball</button>
+      <button id="btn-reset" class="hud-btn reset-btn">🔄 Reset Cans</button>
+    </div>
+
     <script type="module">
 import * as THREE from 'three';
 import * as xb from 'xrblocks';
@@ -69,8 +127,8 @@ const CAN_HEIGHT = 0.15;
 const BALL_RADIUS = 0.046;
 const TABLE_Y = 0.92;
 const TABLE_Z = -1.85;
-// Stand positioned right within immediate arm's reach of the player
-const STAND_POS = new THREE.Vector3(0.14, 0.96, -0.52);
+// Stand positioned right at comfortable arm's reach
+const STAND_POS = new THREE.Vector3(0.18, 0.96, -0.55);
 const INITIAL_BALLS = 5;
 
 class CarnivalAudio {
@@ -80,14 +138,32 @@ class CarnivalAudio {
 
   ensureContext() {
     if (!this.ctx) {
-      const AudioContext = window.AudioContext || window.webkitAudioContext;
-      if (AudioContext) {
-        this.ctx = new AudioContext();
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        this.ctx = new AudioCtx();
       }
     }
     if (this.ctx && this.ctx.state === 'suspended') {
       this.ctx.resume();
     }
+  }
+
+  playGrab() {
+    try {
+      this.ensureContext();
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(260, this.ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(540, this.ctx.currentTime + 0.1);
+      gain.gain.setValueAtTime(0.25, this.ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.1);
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start();
+      osc.stop(this.ctx.currentTime + 0.11);
+    } catch (_) {}
   }
 
   playWhoosh() {
@@ -97,9 +173,9 @@ class CarnivalAudio {
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(380, this.ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(120, this.ctx.currentTime + 0.22);
-      gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
+      osc.frequency.setValueAtTime(420, this.ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(140, this.ctx.currentTime + 0.22);
+      gain.gain.setValueAtTime(0.35, this.ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.22);
       osc.connect(gain);
       gain.connect(this.ctx.destination);
@@ -115,8 +191,8 @@ class CarnivalAudio {
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
       osc.type = 'triangle';
-      osc.frequency.setValueAtTime(820, this.ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(260, this.ctx.currentTime + 0.18);
+      osc.frequency.setValueAtTime(780, this.ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(240, this.ctx.currentTime + 0.18);
       gain.gain.setValueAtTime(0.45, this.ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.18);
       osc.connect(gain);
@@ -153,7 +229,7 @@ function createBaseballTexture() {
   canvas.height = 256;
   const ctx = canvas.getContext('2d');
 
-  ctx.fillStyle = '#f7f4ec';
+  ctx.fillStyle = '#faf8f5';
   ctx.fillRect(0, 0, 512, 256);
 
   ctx.strokeStyle = '#c62828';
@@ -190,9 +266,9 @@ function createCanTexture(colorHex, pointsLabel) {
   ctx.fillRect(0, 0, 256, 256);
 
   // Metallic top and bottom borders
-  ctx.fillStyle = '#e0e0e0';
-  ctx.fillRect(0, 0, 256, 28);
-  ctx.fillRect(0, 228, 256, 28);
+  ctx.fillStyle = '#e2e8f0';
+  ctx.fillRect(0, 0, 256, 26);
+  ctx.fillRect(0, 230, 256, 26);
 
   // White label badge
   ctx.fillStyle = '#ffffff';
@@ -200,12 +276,12 @@ function createCanTexture(colorHex, pointsLabel) {
   ctx.arc(128, 128, 62, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.strokeStyle = '#212121';
+  ctx.strokeStyle = '#1e293b';
   ctx.lineWidth = 4;
   ctx.stroke();
 
   // Points text
-  ctx.fillStyle = '#d32f2f';
+  ctx.fillStyle = '#dc2626';
   ctx.font = 'bold 44px sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -250,11 +326,7 @@ class ConfettiSystem extends THREE.Group {
         Math.random() * 2.8 + 1.2,
         (Math.random() - 0.5) * 3.0
       );
-      p.rotVel.set(
-        Math.random() * 12,
-        Math.random() * 12,
-        Math.random() * 12
-      );
+      p.rotVel.set(Math.random() * 12, Math.random() * 12, Math.random() * 12);
       p.life = 0;
       p.maxLife = 1.6 + Math.random() * 0.8;
     }
@@ -283,7 +355,7 @@ class CarnivalGameScene extends xb.Script {
     this.score = 0;
     this.ballsRemaining = INITIAL_BALLS;
     this.knockedCount = 0;
-    this.pitchPower = 5.5;
+    this.pitchPower = 5.8;
 
     this.audio = new CarnivalAudio();
     this.baseballTexture = createBaseballTexture();
@@ -291,17 +363,16 @@ class CarnivalGameScene extends xb.Script {
     this.cans = [];
     this.balls = [];
     this.controllers = [];
-    this.lastControllerPositions = new Map();
+    this.controllerVelocityBuffers = new Map();
 
     // Natural grab and throw tracking
     this.isGrabbingInteractiveBall = false;
-    this.grabbedController = null;
-    this.grabbedByMouse = false;
-    this.mouseRaycaster = new THREE.Raycaster();
+    this.grabbedSource = null; // Controller or 'mouse'
+    this.grabOffset = new THREE.Vector3();
     this.mouseCoords = new THREE.Vector2();
     this.grabPlane = new THREE.Plane();
     this.grabPlaneIntersect = new THREE.Vector3();
-    this.recentPositions = []; // [{ pos: Vector3, time: number }]
+    this.recentPositions = [];
     this.respawnTimer = null;
 
     this.initPhysics();
@@ -311,12 +382,12 @@ class CarnivalGameScene extends xb.Script {
     this.world = new CANNON.World();
     this.world.gravity.set(0, -9.82, 0);
     this.world.broadphase = new CANNON.NaiveBroadphase();
-    this.world.solver.iterations = 12;
+    this.world.solver.iterations = 14;
 
     const defaultMat = new CANNON.Material('default');
     const contactMat = new CANNON.ContactMaterial(defaultMat, defaultMat, {
-      friction: 0.42,
-      restitution: 0.32,
+      friction: 0.44,
+      restitution: 0.3,
     });
     this.world.addContactMaterial(contactMat);
     this.world.defaultContactMaterial = contactMat;
@@ -327,9 +398,9 @@ class CarnivalGameScene extends xb.Script {
     this.setupCarnivalBooth();
     this.setupCanPyramid();
     this.setupBallStand();
-    this.setupHandsAndControllers();
+    this.setupInteractiveHands();
     this.setupSpatialUI();
-    this.setupDesktopControls();
+    this.setupControls();
 
     this.confetti = new ConfettiSystem(80);
     this.add(this.confetti);
@@ -339,12 +410,12 @@ class CarnivalGameScene extends xb.Script {
     const hemi = new THREE.HemisphereLight(0xfff7e6, 0x422a1d, 2.6);
     this.add(hemi);
 
-    const dir = new THREE.DirectionalLight(0xfff5e6, 2.5);
+    const dir = new THREE.DirectionalLight(0xfff5e6, 2.6);
     dir.position.set(2.0, 4.2, 1.5);
     dir.castShadow = true;
     this.add(dir);
 
-    // Warm booth lamps
+    // Warm booth lanterns
     const leftLamp = new THREE.PointLight(0xffb74d, 2.0, 5.0);
     leftLamp.position.set(-0.8, 2.2, TABLE_Z + 0.3);
     const rightLamp = new THREE.PointLight(0xffb74d, 2.0, 5.0);
@@ -367,7 +438,7 @@ class CarnivalGameScene extends xb.Script {
     tableMesh.receiveShadow = true;
     this.boothGroup.add(tableMesh);
 
-    // Physical static counter surface
+    // Static physics body for counter
     const tableBody = new CANNON.Body({ mass: 0 });
     tableBody.addShape(new CANNON.Box(new CANNON.Vec3(0.85, 0.05, 0.45)));
     tableBody.position.set(0, TABLE_Y - 0.05, TABLE_Z);
@@ -388,7 +459,7 @@ class CarnivalGameScene extends xb.Script {
       this.boothGroup.add(leg);
     }
 
-    // Booth backdrop backboard
+    // Booth backdrop
     const backGeom = new THREE.BoxGeometry(2.2, 2.2, 0.08);
     const backMat = new THREE.MeshStandardMaterial({
       color: 0x1a237e,
@@ -403,7 +474,7 @@ class CarnivalGameScene extends xb.Script {
     backBody.position.set(0, 1.45, TABLE_Z - 0.45);
     this.world.addBody(backBody);
 
-    // Side guards to keep cans contained on table
+    // Side guards to keep cans contained
     const sideGeom = new THREE.BoxGeometry(0.06, 0.3, 0.85);
     const sideMat = new THREE.MeshStandardMaterial({ color: 0x4e342e });
     const leftSide = new THREE.Mesh(sideGeom, sideMat);
@@ -468,14 +539,14 @@ class CarnivalGameScene extends xb.Script {
       mesh.receiveShadow = true;
       this.add(mesh);
 
-      // Stable rigid body using box bounds for perfect initial stacking balance
+      // Stable rigid body with damping for reliable stacking
       const body = new CANNON.Body({
-        mass: 0.35,
+        mass: 0.32,
         position: new CANNON.Vec3(cfg.x, cfg.y, cfg.z),
       });
       body.addShape(new CANNON.Box(new CANNON.Vec3(CAN_RADIUS * 0.9, CAN_HEIGHT / 2, CAN_RADIUS * 0.9)));
       body.linearDamping = 0.25;
-      body.angularDamping = 0.3;
+      body.angularDamping = 0.35;
 
       this.world.addBody(body);
 
@@ -492,7 +563,7 @@ class CarnivalGameScene extends xb.Script {
   }
 
   setupBallStand() {
-    const standGeom = new THREE.CylinderGeometry(0.16, 0.2, 0.95, 24);
+    const standGeom = new THREE.CylinderGeometry(0.14, 0.18, 0.95, 24);
     const standMat = new THREE.MeshStandardMaterial({
       color: 0x37474f,
       roughness: 0.6,
@@ -509,7 +580,7 @@ class CarnivalGameScene extends xb.Script {
     cup.position.set(STAND_POS.x, STAND_POS.y + 0.015, STAND_POS.z);
     this.add(cup);
 
-    // Interactive baseball on pedestal
+    // Interactive grabbable baseball
     const ballGeom = new THREE.SphereGeometry(BALL_RADIUS, 24, 24);
     const ballMat = new THREE.MeshStandardMaterial({
       map: this.baseballTexture,
@@ -522,8 +593,14 @@ class CarnivalGameScene extends xb.Script {
     this.interactiveBall.castShadow = true;
     this.interactiveBall.name = 'InteractiveBall';
 
-    // Glowing target ring around ball to indicate grabability
-    const ringGeom = new THREE.RingGeometry(BALL_RADIUS + 0.015, BALL_RADIUS + 0.032, 32);
+    // Configure XR Blocks interaction properties on ball
+    this.interactiveBall.xb = {
+      pointerEvents: 'auto',
+      reticleMode: 'auto',
+    };
+
+    // Grab target indicator ring
+    const ringGeom = new THREE.RingGeometry(BALL_RADIUS + 0.012, BALL_RADIUS + 0.028, 32);
     const ringMat = new THREE.MeshBasicMaterial({
       color: 0x00e5ff,
       side: THREE.DoubleSide,
@@ -532,66 +609,226 @@ class CarnivalGameScene extends xb.Script {
     });
     this.grabRing = new THREE.Mesh(ringGeom, ringMat);
     this.grabRing.rotation.x = -Math.PI / 2;
-    this.grabRing.position.y = -BALL_RADIUS * 0.5;
+    this.grabRing.position.y = -BALL_RADIUS * 0.4;
     this.interactiveBall.add(this.grabRing);
 
     this.add(this.interactiveBall);
   }
 
-  setupHandsAndControllers() {
+  setupInteractiveHands() {
     this.handVisuals = [];
-    const controllerColors = [0x29b6f6, 0xab47bc];
+    const controllerColors = [0x0284c7, 0x9333ea];
 
     for (let i = 0; i < 2; i++) {
       const group = new THREE.Group();
-      group.name = `ControllerHand_${i}`;
+      group.name = `GrabbableHand_${i}`;
       group.visible = false;
 
-      // Stylized glove palm / controller body
-      const palmGeom = new THREE.BoxGeometry(0.065, 0.035, 0.11);
+      // Ergonomic VR controller glove body
+      const palmGeom = new THREE.BoxGeometry(0.065, 0.038, 0.1);
       const palmMat = new THREE.MeshStandardMaterial({
         color: controllerColors[i],
-        roughness: 0.4,
-        metalness: 0.3,
+        roughness: 0.3,
+        metalness: 0.2,
       });
       const palm = new THREE.Mesh(palmGeom, palmMat);
       group.add(palm);
 
-      // Grip sphere
-      const gripGeom = new THREE.SphereGeometry(0.028, 16, 16);
-      const gripMat = new THREE.MeshStandardMaterial({ color: 0x263238 });
-      const grip = new THREE.Mesh(gripGeom, gripMat);
-      grip.position.set(0, -0.02, 0.02);
-      group.add(grip);
+      // Grasping fingers indicator
+      const fingersGeom = new THREE.BoxGeometry(0.06, 0.024, 0.04);
+      const fingersMat = new THREE.MeshStandardMaterial({ color: 0x1e293b });
+      const fingers = new THREE.Mesh(fingersGeom, fingersMat);
+      fingers.position.set(0, 0.015, -0.06);
+      group.add(fingers);
 
-      // Forward pointing laser reticle ray
-      const rayGeom = new THREE.CylinderGeometry(0.002, 0.002, 0.7, 8);
+      // Aiming laser reticle
+      const rayGeom = new THREE.CylinderGeometry(0.002, 0.002, 0.65, 8);
       const rayMat = new THREE.MeshBasicMaterial({
-        color: 0x00e5ff,
+        color: 0x38bdf8,
         transparent: true,
         opacity: 0.65,
       });
       const ray = new THREE.Mesh(rayGeom, rayMat);
       ray.rotation.x = -Math.PI / 2;
-      ray.position.set(0, 0, -0.35);
+      ray.position.set(0, 0, -0.32);
       group.add(ray);
 
+      // Grab proximity sphere
+      const grabSphereGeom = new THREE.SphereGeometry(0.08, 16, 16);
+      const grabSphereMat = new THREE.MeshBasicMaterial({
+        color: 0x00e5ff,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.0,
+      });
+      const grabSphere = new THREE.Mesh(grabSphereGeom, grabSphereMat);
+      group.add(grabSphere);
+
       this.add(group);
-      this.handVisuals.push({ group, ray, color: controllerColors[i] });
+      this.handVisuals.push({
+        group,
+        palm,
+        fingers,
+        ray,
+        grabSphere,
+        color: controllerColors[i],
+      });
     }
   }
 
-  setupDesktopControls() {
+  setupSpatialUI() {
+    this.scoreText = new xb.UIText({
+      text: 'SCORE: 0',
+      style: {
+        fontSize: 26,
+        fontWeight: 'bold',
+        color: '#ffea00',
+        textAlign: 'center',
+      },
+    });
+
+    this.ballsText = new xb.UIText({
+      text: `BALLS: ${this.ballsRemaining}`,
+      style: {
+        fontSize: 20,
+        fontWeight: 'bold',
+        color: '#ffffff',
+        textAlign: 'center',
+      },
+    });
+
+    this.statusText = new xb.UIText({
+      text: 'Grab ball with hands or tap Toss Ball to pitch!',
+      style: {
+        fontSize: 14,
+        color: '#cbd5e1',
+        textAlign: 'center',
+        lineHeight: 1.3,
+      },
+    });
+
+    this.powerSlider = new xb.UISlider({
+      ariaLabel: 'Pitch Power',
+      min: 3.5,
+      max: 9.0,
+      step: 0.5,
+      value: this.pitchPower,
+      style: { width: '100%', height: 32 },
+      onInput: (val) => {
+        this.pitchPower = val;
+      },
+    });
+
+    // Start / New Round button
+    const startBtn = new xb.UIButton({
+      label: 'Start Game',
+      icon: 'play_arrow',
+      style: { flexGrow: 1, padding: 10 },
+      onClick: () => this.startGame(),
+    });
+
+    // Pitch button
+    const pitchBtn = new xb.UIButton({
+      label: 'Toss Ball',
+      icon: 'sports_baseball',
+      style: { flexGrow: 1, padding: 10 },
+      onClick: () => this.pitchTowardsCans(1.0),
+    });
+
+    // Reset button
+    const resetBtn = new xb.UIButton({
+      label: 'Reset',
+      icon: 'restart_alt',
+      style: { flexGrow: 1, padding: 10 },
+      onClick: () => this.resetGame(),
+    });
+
+    this.uiCard = new xb.UICard({
+      size: { width: 0.44, height: 'auto' },
+      // Manipulation set to false so clicking buttons is instant and smooth
+      manipulation: false,
+      style: {
+        flexDirection: 'column',
+        gap: 10,
+        padding: 16,
+        backgroundColor: 'rgba(15, 23, 42, 0.95)',
+        borderRadius: 18,
+        borderWidth: 2,
+        borderColor: 'rgba(255, 255, 255, 0.15)',
+      },
+      children: [
+        new xb.UIText({
+          text: '🎪 CAN TOSS',
+          style: {
+            fontSize: 24,
+            fontWeight: 'bold',
+            textAlign: 'center',
+            color: '#ef4444',
+          },
+        }),
+        this.scoreText,
+        this.ballsText,
+        this.statusText,
+        new xb.UIPanel({
+          style: {
+            width: '100%',
+            flexDirection: 'row',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginTop: 2,
+          },
+          children: [
+            new xb.UIText({ text: 'Power', style: { fontSize: 14, color: '#e2e8f0' } }),
+          ],
+        }),
+        this.powerSlider,
+        new xb.UIPanel({
+          style: { width: '100%', flexDirection: 'row', gap: 8 },
+          children: [startBtn, pitchBtn, resetBtn],
+        }),
+      ],
+    });
+
+    // Ergonomically located within immediate reach beside the player
+    this.uiCard.position.set(-0.36, 1.02, -0.52);
+    this.uiCard.rotation.set(-0.16, 0.42, 0);
+    this.add(this.uiCard);
+  }
+
+  setupControls() {
+    // Connect DOM HUD buttons for immediate responsiveness
+    const btnStart = document.getElementById('btn-start');
+    const btnToss = document.getElementById('btn-toss');
+    const btnReset = document.getElementById('btn-reset');
+
+    if (btnStart) btnStart.addEventListener('click', () => this.startGame());
+    if (btnToss) btnToss.addEventListener('click', () => this.pitchTowardsCans(1.0));
+    if (btnReset) btnReset.addEventListener('click', () => this.resetGame());
+
+    // Desktop mouse fling & touch fallback controls
     window.addEventListener('mousedown', (e) => this.onPointerDown(e));
     window.addEventListener('mousemove', (e) => this.onPointerMove(e));
     window.addEventListener('mouseup', (e) => this.onPointerUp(e));
-    window.addEventListener('touchstart', (e) => this.onTouchStart(e), { passive: false });
-    window.addEventListener('touchmove', (e) => this.onTouchMove(e), { passive: false });
-    window.addEventListener('touchend', (e) => this.onTouchEnd(e), { passive: false });
+    window.addEventListener('touchstart', (e) => {
+      if (e.touches.length > 0) this.onPointerDown(e.touches[0]);
+    }, { passive: false });
+    window.addEventListener('touchmove', (e) => {
+      if (e.touches.length > 0) this.onPointerMove(e.touches[0]);
+    }, { passive: false });
+    window.addEventListener('touchend', (e) => {
+      if (e.changedTouches.length > 0) this.onPointerUp(e.changedTouches[0]);
+    }, { passive: false });
+  }
+
+  startGame() {
+    this.resetGame();
+    this.statusText.text = 'Game started! Aim for the top 500pt can!';
+    this.statusText.style.color = '#38bdf8';
+    this.audio.playGrab();
   }
 
   onPointerDown(event) {
-    if (event.target.tagName === 'BUTTON' || event.target.closest('button') || event.target.closest('input')) return;
+    if (event.target.tagName === 'BUTTON' || event.target.closest('button')) return;
     if (this.ballsRemaining <= 0 || !this.interactiveBall.visible) return;
 
     this.mouseCoords.x = (event.clientX / window.innerWidth) * 2 - 1;
@@ -600,19 +837,20 @@ class CarnivalGameScene extends xb.Script {
     const camera = xb.core.camera;
     if (!camera) return;
 
-    this.mouseRaycaster.setFromCamera(this.mouseCoords, camera);
-    const intersects = this.mouseRaycaster.intersectObject(this.interactiveBall, true);
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(this.mouseCoords, camera);
+    const intersects = raycaster.intersectObject(this.interactiveBall, true);
+    const distToBall = raycaster.ray.distanceToPoint(this.interactiveBall.position);
 
-    // Direct grab on ball or click near ball stand
-    const distToBall = this.mouseRaycaster.ray.distanceToPoint(this.interactiveBall.position);
-    if (intersects.length > 0 || distToBall < 0.22) {
+    if (intersects.length > 0 || distToBall < 0.2) {
       this.isGrabbingInteractiveBall = true;
-      this.grabbedByMouse = true;
+      this.grabbedSource = 'mouse';
+      this.audio.playGrab();
+
       this.recentPositions = [
-        { pos: this.interactiveBall.position.clone(), time: performance.now() }
+        { pos: this.interactiveBall.position.clone(), time: performance.now() },
       ];
 
-      // Define a movement plane facing camera at the ball's current depth
       const camDir = new THREE.Vector3();
       camera.getWorldDirection(camDir);
       this.grabPlane.setFromNormalAndCoplanarPoint(camDir.negate(), this.interactiveBall.position);
@@ -620,7 +858,7 @@ class CarnivalGameScene extends xb.Script {
   }
 
   onPointerMove(event) {
-    if (!this.grabbedByMouse || !this.isGrabbingInteractiveBall) return;
+    if (!this.isGrabbingInteractiveBall || this.grabbedSource !== 'mouse') return;
 
     this.mouseCoords.x = (event.clientX / window.innerWidth) * 2 - 1;
     this.mouseCoords.y = -(event.clientY / window.innerHeight) * 2 + 1;
@@ -628,29 +866,28 @@ class CarnivalGameScene extends xb.Script {
     const camera = xb.core.camera;
     if (!camera) return;
 
-    this.mouseRaycaster.setFromCamera(this.mouseCoords, camera);
-    if (this.mouseRaycaster.ray.intersectPlane(this.grabPlane, this.grabPlaneIntersect)) {
-      // Dynamic depth adjustment: as you drag upward, move ball slightly forward for realistic throw arc
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(this.mouseCoords, camera);
+
+    if (raycaster.ray.intersectPlane(this.grabPlane, this.grabPlaneIntersect)) {
       const dy = Math.max(0, this.grabPlaneIntersect.y - STAND_POS.y);
       this.grabPlaneIntersect.z = STAND_POS.z - dy * 0.45;
       this.interactiveBall.position.copy(this.grabPlaneIntersect);
 
       const now = performance.now();
       this.recentPositions.push({ pos: this.interactiveBall.position.clone(), time: now });
-      // Keep only recent frames (last 120ms) for smooth velocity calculation
       while (this.recentPositions.length > 1 && now - this.recentPositions[0].time > 120) {
         this.recentPositions.shift();
       }
     }
   }
 
-  onPointerUp(event) {
-    if (!this.grabbedByMouse || !this.isGrabbingInteractiveBall) return;
+  onPointerUp() {
+    if (!this.isGrabbingInteractiveBall || this.grabbedSource !== 'mouse') return;
 
     this.isGrabbingInteractiveBall = false;
-    this.grabbedByMouse = false;
+    this.grabbedSource = null;
 
-    // Calculate actual release velocity vector from physical drag trajectory
     let throwVelocity = new THREE.Vector3(0, 3.2, -6.0);
 
     if (this.recentPositions.length >= 2) {
@@ -658,36 +895,17 @@ class CarnivalGameScene extends xb.Script {
       const newest = this.recentPositions[this.recentPositions.length - 1];
       const dt = Math.max(0.016, (newest.time - oldest.time) / 1000);
       const delta = newest.pos.clone().sub(oldest.pos);
-      const computedVel = delta.divideScalar(dt).multiplyScalar(1.2);
+      const computedVel = delta.divideScalar(dt).multiplyScalar(1.25);
 
-      // Ensure forward throwing momentum
       if (computedVel.z >= -1.0) {
-        computedVel.z = -Math.max(4.0, Math.hypot(computedVel.x, computedVel.y) * 1.25);
+        computedVel.z = -Math.max(4.2, Math.hypot(computedVel.x, computedVel.y) * 1.3);
       }
-      computedVel.y = Math.max(1.8, computedVel.y + 0.5);
+      computedVel.y = Math.max(1.8, computedVel.y + 0.6);
       throwVelocity.copy(computedVel);
     }
 
     this.pitchBallWithVelocity(throwVelocity, this.interactiveBall.position);
     this.hideAndRespawnBall();
-  }
-
-  onTouchStart(e) {
-    if (e.touches.length > 0) {
-      this.onPointerDown(e.touches[0]);
-    }
-  }
-
-  onTouchMove(e) {
-    if (e.touches.length > 0) {
-      this.onPointerMove(e.touches[0]);
-    }
-  }
-
-  onTouchEnd(e) {
-    if (e.changedTouches.length > 0) {
-      this.onPointerUp(e.changedTouches[0]);
-    }
   }
 
   hideAndRespawnBall() {
@@ -712,11 +930,7 @@ class CarnivalGameScene extends xb.Script {
 
     const spawnPos = customSpawnPos
       ? customSpawnPos.clone()
-      : new THREE.Vector3(
-          STAND_POS.x,
-          STAND_POS.y + BALL_RADIUS + 0.05,
-          STAND_POS.z
-        );
+      : new THREE.Vector3(STAND_POS.x, STAND_POS.y + BALL_RADIUS + 0.05, STAND_POS.z);
 
     const ballMesh = new THREE.Mesh(
       new THREE.SphereGeometry(BALL_RADIUS, 24, 24),
@@ -737,12 +951,11 @@ class CarnivalGameScene extends xb.Script {
     });
     ballBody.velocity.set(velocity.x, velocity.y, velocity.z);
     ballBody.angularVelocity.set(
-      (Math.random() - 0.5) * 15,
-      (Math.random() - 0.5) * 15,
-      (Math.random() - 0.5) * 15
+      (Math.random() - 0.5) * 16,
+      (Math.random() - 0.5) * 16,
+      (Math.random() - 0.5) * 16
     );
 
-    // Collision audio on ball impact with can or table
     ballBody.addEventListener('collide', (ev) => {
       if (ev.body && ev.body.mass > 0) {
         this.audio.playCanHit();
@@ -775,128 +988,19 @@ class CarnivalGameScene extends xb.Script {
     this.hideAndRespawnBall();
   }
 
-  setupSpatialUI() {
-    this.scoreText = new xb.UIText({
-      text: 'SCORE: 0',
-      style: {
-        fontSize: 26,
-        fontWeight: 'bold',
-        color: '#ffea00',
-        textAlign: 'center',
-      },
-    });
-
-    this.ballsText = new xb.UIText({
-      text: `BALLS: ${this.ballsRemaining}`,
-      style: {
-        fontSize: 20,
-        fontWeight: 'bold',
-        color: '#ffffff',
-        textAlign: 'center',
-      },
-    });
-
-    this.statusText = new xb.UIText({
-      text: 'Grab ball directly to throw, or use Pitch button!',
-      style: {
-        fontSize: 14,
-        color: '#b0bec5',
-        textAlign: 'center',
-        lineHeight: 1.3,
-      },
-    });
-
-    this.powerSlider = new xb.UISlider({
-      ariaLabel: 'Pitch Power',
-      min: 3.5,
-      max: 9.0,
-      step: 0.5,
-      value: this.pitchPower,
-      style: { width: '100%', height: 32 },
-      onInput: (val) => {
-        this.pitchPower = val;
-      },
-    });
-
-    const pitchBtn = new xb.UIButton({
-      label: 'Toss Ball',
-      icon: 'sports_baseball',
-      style: { flexGrow: 1, padding: 10 },
-      onClick: () => this.pitchTowardsCans(1.0),
-    });
-
-    const resetBtn = new xb.UIButton({
-      label: 'Reset',
-      icon: 'restart_alt',
-      style: { flexGrow: 1, padding: 10 },
-      onClick: () => this.resetGame(),
-    });
-
-    this.uiCard = new xb.UICard({
-      size: { width: 0.44, height: 'auto' },
-      manipulation: true,
-      edge: { scale: true },
-      style: {
-        flexDirection: 'column',
-        gap: 10,
-        padding: 16,
-        backgroundColor: 'rgba(15, 23, 42, 0.94)',
-        borderRadius: 18,
-        borderWidth: 2,
-        borderColor: 'rgba(255, 255, 255, 0.15)',
-      },
-      children: [
-        new xb.UIText({
-          text: '🎪 CAN TOSS',
-          style: {
-            fontSize: 24,
-            fontWeight: 'bold',
-            textAlign: 'center',
-            color: '#ff5252',
-          },
-        }),
-        this.scoreText,
-        this.ballsText,
-        this.statusText,
-        new xb.UIPanel({
-          style: {
-            width: '100%',
-            flexDirection: 'row',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginTop: 2,
-          },
-          children: [
-            new xb.UIText({ text: 'Power', style: { fontSize: 14, color: '#eceff1' } }),
-          ],
-        }),
-        this.powerSlider,
-        new xb.UIPanel({
-          style: { width: '100%', flexDirection: 'row', gap: 8 },
-          children: [pitchBtn, resetBtn],
-        }),
-      ],
-    });
-
-    // Ergonomically placed right next to the player at arm's reach console height
-    this.uiCard.position.set(-0.32, 1.02, -0.52);
-    this.uiCard.rotation.set(-0.16, 0.42, 0);
-    this.add(this.uiCard);
-  }
-
   updateUI() {
     this.scoreText.text = `SCORE: ${this.score}`;
     this.ballsText.text = `BALLS: ${this.ballsRemaining}`;
 
     if (this.knockedCount === this.cans.length) {
       this.statusText.text = '🎉 STRIKE! ALL CANS DOWN! +500 PTS!';
-      this.statusText.style.color = '#00e676';
+      this.statusText.style.color = '#22c55e';
     } else if (this.ballsRemaining <= 0) {
-      this.statusText.text = 'Out of balls! Hit Reset Cans to play again!';
-      this.statusText.style.color = '#ff9100';
+      this.statusText.text = 'Out of balls! Hit Start Game or Reset Cans!';
+      this.statusText.style.color = '#f97316';
     } else {
       this.statusText.text = `${this.knockedCount}/6 cans knocked down!`;
-      this.statusText.style.color = '#cfd8dc';
+      this.statusText.style.color = '#cbd5e1';
     }
   }
 
@@ -934,7 +1038,7 @@ class CarnivalGameScene extends xb.Script {
     }
   }
 
-  updateControllers(dt) {
+  updateHandsAndControllers(dt) {
     const inputControllers = xb.core.input?.controllers || [];
 
     for (let i = 0; i < this.handVisuals.length; i++) {
@@ -946,32 +1050,63 @@ class CarnivalGameScene extends xb.Script {
         visual.group.position.copy(controller.position);
         visual.group.quaternion.copy(controller.quaternion);
 
-        // Track velocity buffer for realistic 6DoF hand throwing
-        const prev = this.lastControllerPositions.get(controller) || controller.position.clone();
-        const vel = controller.position.clone().sub(prev).divideScalar(Math.max(0.001, dt));
-        this.lastControllerPositions.set(controller, controller.position.clone());
+        // Track velocity buffer for realistic 6DoF momentum release
+        let history = this.controllerVelocityBuffers.get(controller);
+        if (!history) {
+          history = [];
+          this.controllerVelocityBuffers.set(controller, history);
+        }
+        const now = performance.now();
+        history.push({ pos: controller.position.clone(), time: now });
+        while (history.length > 1 && now - history[0].time > 120) {
+          history.shift();
+        }
 
-        // Check grabbing interaction with the baseball on pedestal
         const distToBall = controller.position.distanceTo(this.interactiveBall.position);
         const isTriggerOrGrip = Boolean(controller.userData?.selected || controller.userData?.squeezed);
 
-        if (distToBall < 0.16 && isTriggerOrGrip && !this.isGrabbingInteractiveBall && this.interactiveBall.visible) {
-          this.isGrabbingInteractiveBall = true;
-          this.grabbedController = controller;
+        // Highlight hand and ball grab ring when within reach
+        if (distToBall < 0.16 && this.interactiveBall.visible) {
+          visual.grabSphere.material.opacity = 0.45;
+          this.grabRing.material.color.set(0x22c55e);
+        } else {
+          visual.grabSphere.material.opacity = 0.0;
+          this.grabRing.material.color.set(0x00e5ff);
         }
 
-        // Grabbing update: stick ball to controller/hand
-        if (this.isGrabbingInteractiveBall && this.grabbedController === controller) {
+        // Grabbing condition
+        if (distToBall < 0.16 && isTriggerOrGrip && !this.isGrabbingInteractiveBall && this.interactiveBall.visible) {
+          this.isGrabbingInteractiveBall = true;
+          this.grabbedSource = controller;
+          this.audio.playGrab();
+          visual.fingers.position.set(0, 0.015, -0.04); // Clench fingers
+        }
+
+        // Holding ball: stick to hand
+        if (this.isGrabbingInteractiveBall && this.grabbedSource === controller) {
           this.interactiveBall.position.copy(controller.position);
 
-          // On release: natural 6DOF throw with hand momentum!
+          // Release: compute velocity from buffer
           if (!isTriggerOrGrip) {
             this.isGrabbingInteractiveBall = false;
-            this.grabbedController = null;
-            let throwVel = vel.clone().multiplyScalar(1.4);
-            if (throwVel.length() < 1.2) {
-              throwVel = new THREE.Vector3(0, 2.6, -5.2);
+            this.grabbedSource = null;
+            visual.fingers.position.set(0, 0.015, -0.06); // Open fingers
+
+            let throwVel = new THREE.Vector3(0, 2.8, -5.5);
+            if (history.length >= 2) {
+              const oldest = history[0];
+              const newest = history[history.length - 1];
+              const timeDiff = Math.max(0.016, (newest.time - oldest.time) / 1000);
+              const computed = newest.pos.clone().sub(oldest.pos).divideScalar(timeDiff).multiplyScalar(1.35);
+
+              if (computed.length() > 1.2) {
+                throwVel.copy(computed);
+                if (throwVel.z >= -0.8) {
+                  throwVel.z = -Math.max(3.8, Math.hypot(throwVel.x, throwVel.y) * 1.2);
+                }
+              }
             }
+
             this.pitchBallWithVelocity(throwVel, controller.position);
             this.hideAndRespawnBall();
           }
@@ -985,7 +1120,7 @@ class CarnivalGameScene extends xb.Script {
   update() {
     const dt = xb.getDeltaTime() || 0.016;
 
-    // Pulse grab ring
+    // Pulse target ring
     this.grabRing.rotation.z += 0.025;
     this.grabRing.material.opacity = 0.55 + Math.sin(performance.now() * 0.006) * 0.25;
 
@@ -998,7 +1133,6 @@ class CarnivalGameScene extends xb.Script {
 
     for (const can of this.cans) {
       if (!can.isKnocked) {
-        // Can is considered knocked if tilted > 40 degrees or fallen below table height
         const up = new THREE.Vector3(0, 1, 0).applyQuaternion(can.mesh.quaternion);
         const tilt = Math.acos(Math.max(-1, Math.min(1, up.y)));
         const fellDown = can.mesh.position.y < TABLE_Y - 0.05;
@@ -1023,14 +1157,13 @@ class CarnivalGameScene extends xb.Script {
       }
     }
 
-    // Update active thrown baseballs
+    // Update active baseballs
     for (let i = this.balls.length - 1; i >= 0; i--) {
       const b = this.balls[i];
       b.aliveTime += dt;
       b.mesh.position.copy(b.body.position);
       b.mesh.quaternion.copy(b.body.quaternion);
 
-      // Despawn balls after 6 seconds
       if (b.aliveTime > 6.0) {
         this.world.removeBody(b.body);
         this.remove(b.mesh);
@@ -1040,7 +1173,7 @@ class CarnivalGameScene extends xb.Script {
       }
     }
 
-    this.updateControllers(dt);
+    this.updateHandsAndControllers(dt);
     this.confetti.update(dt);
   }
 
@@ -1066,6 +1199,8 @@ document.addEventListener('DOMContentLoaded', () => {
   options.enableHands();
   options.enableReticles();
   options.hands.visualization = true;
+  options.hands.visualizeJoints = true;
+  options.hands.visualizeMeshes = true;
   options.reticles.enabled = true;
   options.simulator.defaultMode = xb.SimulatorMode.CONTROLLER;
   options.xrButton.showEnterSimulatorButton = true;
