@@ -68,8 +68,9 @@ const CAN_RADIUS = 0.052;
 const CAN_HEIGHT = 0.15;
 const BALL_RADIUS = 0.046;
 const TABLE_Y = 0.92;
-const TABLE_Z = -1.65;
-const STAND_POS = new THREE.Vector3(0, 0.95, -0.68);
+const TABLE_Z = -1.85;
+// Stand positioned right within immediate arm's reach of the player
+const STAND_POS = new THREE.Vector3(0.14, 0.96, -0.52);
 const INITIAL_BALLS = 5;
 
 class CarnivalAudio {
@@ -292,11 +293,16 @@ class CarnivalGameScene extends xb.Script {
     this.controllers = [];
     this.lastControllerPositions = new Map();
 
-    // Grabbing state
+    // Natural grab and throw tracking
     this.isGrabbingInteractiveBall = false;
     this.grabbedController = null;
-    this.isMouseDown = false;
-    this.dragStartPos = new THREE.Vector2();
+    this.grabbedByMouse = false;
+    this.mouseRaycaster = new THREE.Raycaster();
+    this.mouseCoords = new THREE.Vector2();
+    this.grabPlane = new THREE.Plane();
+    this.grabPlaneIntersect = new THREE.Vector3();
+    this.recentPositions = []; // [{ pos: Vector3, time: number }]
+    this.respawnTimer = null;
 
     this.initPhysics();
   }
@@ -496,6 +502,13 @@ class CarnivalGameScene extends xb.Script {
     this.stand.position.set(STAND_POS.x, STAND_POS.y / 2, STAND_POS.z);
     this.add(this.stand);
 
+    // Pedestal cup
+    const cupGeom = new THREE.CylinderGeometry(0.065, 0.04, 0.03, 16);
+    const cupMat = new THREE.MeshStandardMaterial({ color: 0xc2185b, roughness: 0.5 });
+    const cup = new THREE.Mesh(cupGeom, cupMat);
+    cup.position.set(STAND_POS.x, STAND_POS.y + 0.015, STAND_POS.z);
+    this.add(cup);
+
     // Interactive baseball on pedestal
     const ballGeom = new THREE.SphereGeometry(BALL_RADIUS, 24, 24);
     const ballMat = new THREE.MeshStandardMaterial({
@@ -505,8 +518,9 @@ class CarnivalGameScene extends xb.Script {
     });
     this.interactiveBall = new THREE.Mesh(ballGeom, ballMat);
     this.interactiveBall.position.copy(STAND_POS);
-    this.interactiveBall.position.y += BALL_RADIUS + 0.02;
+    this.interactiveBall.position.y += BALL_RADIUS + 0.03;
     this.interactiveBall.castShadow = true;
+    this.interactiveBall.name = 'InteractiveBall';
 
     // Glowing target ring around ball to indicate grabability
     const ringGeom = new THREE.RingGeometry(BALL_RADIUS + 0.015, BALL_RADIUS + 0.032, 32);
@@ -577,46 +591,85 @@ class CarnivalGameScene extends xb.Script {
   }
 
   onPointerDown(event) {
-    if (event.target.tagName === 'BUTTON' || event.target.closest('button')) return;
-    this.isMouseDown = true;
-    this.dragStartPos.set(event.clientX, event.clientY);
-    this.dragStartTime = performance.now();
+    if (event.target.tagName === 'BUTTON' || event.target.closest('button') || event.target.closest('input')) return;
+    if (this.ballsRemaining <= 0 || !this.interactiveBall.visible) return;
+
+    this.mouseCoords.x = (event.clientX / window.innerWidth) * 2 - 1;
+    this.mouseCoords.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+    const camera = xb.core.camera;
+    if (!camera) return;
+
+    this.mouseRaycaster.setFromCamera(this.mouseCoords, camera);
+    const intersects = this.mouseRaycaster.intersectObject(this.interactiveBall, true);
+
+    // Direct grab on ball or click near ball stand
+    const distToBall = this.mouseRaycaster.ray.distanceToPoint(this.interactiveBall.position);
+    if (intersects.length > 0 || distToBall < 0.22) {
+      this.isGrabbingInteractiveBall = true;
+      this.grabbedByMouse = true;
+      this.recentPositions = [
+        { pos: this.interactiveBall.position.clone(), time: performance.now() }
+      ];
+
+      // Define a movement plane facing camera at the ball's current depth
+      const camDir = new THREE.Vector3();
+      camera.getWorldDirection(camDir);
+      this.grabPlane.setFromNormalAndCoplanarPoint(camDir.negate(), this.interactiveBall.position);
+    }
   }
 
   onPointerMove(event) {
-    if (!this.isMouseDown) return;
-    const dy = event.clientY - this.dragStartPos.y;
-    // Animate interactive ball slightly during drag
-    this.interactiveBall.position.y = STAND_POS.y + BALL_RADIUS + 0.02 - dy * 0.0006;
+    if (!this.grabbedByMouse || !this.isGrabbingInteractiveBall) return;
+
+    this.mouseCoords.x = (event.clientX / window.innerWidth) * 2 - 1;
+    this.mouseCoords.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+    const camera = xb.core.camera;
+    if (!camera) return;
+
+    this.mouseRaycaster.setFromCamera(this.mouseCoords, camera);
+    if (this.mouseRaycaster.ray.intersectPlane(this.grabPlane, this.grabPlaneIntersect)) {
+      // Dynamic depth adjustment: as you drag upward, move ball slightly forward for realistic throw arc
+      const dy = Math.max(0, this.grabPlaneIntersect.y - STAND_POS.y);
+      this.grabPlaneIntersect.z = STAND_POS.z - dy * 0.45;
+      this.interactiveBall.position.copy(this.grabPlaneIntersect);
+
+      const now = performance.now();
+      this.recentPositions.push({ pos: this.interactiveBall.position.clone(), time: now });
+      // Keep only recent frames (last 120ms) for smooth velocity calculation
+      while (this.recentPositions.length > 1 && now - this.recentPositions[0].time > 120) {
+        this.recentPositions.shift();
+      }
+    }
   }
 
   onPointerUp(event) {
-    if (!this.isMouseDown) return;
-    this.isMouseDown = false;
+    if (!this.grabbedByMouse || !this.isGrabbingInteractiveBall) return;
 
-    const dx = event.clientX - this.dragStartPos.x;
-    const dy = event.clientY - this.dragStartPos.y;
-    const dt = Math.max(16, performance.now() - this.dragStartTime);
+    this.isGrabbingInteractiveBall = false;
+    this.grabbedByMouse = false;
 
-    // If dragged upward/forward or clicked, pitch the ball!
-    const flingStrength = Math.hypot(dx, dy);
-    let pitchVelocity;
+    // Calculate actual release velocity vector from physical drag trajectory
+    let throwVelocity = new THREE.Vector3(0, 3.2, -6.0);
 
-    if (flingStrength > 30 && dy < 0) {
-      // Swiped upward: fling in direction of swipe
-      const vx = (dx / dt) * 1.8;
-      const vy = Math.min(8.5, Math.max(2.2, (-dy / dt) * 2.6));
-      const vz = -Math.min(9.5, Math.max(3.5, (flingStrength / dt) * 3.2));
-      pitchVelocity = new THREE.Vector3(vx, vy, vz);
-    } else {
-      // Direct pitch forward towards target center
-      const targetX = (event.clientX / window.innerWidth - 0.5) * 0.6;
-      pitchVelocity = new THREE.Vector3(targetX * 3.5, 3.2, -5.8);
+    if (this.recentPositions.length >= 2) {
+      const oldest = this.recentPositions[0];
+      const newest = this.recentPositions[this.recentPositions.length - 1];
+      const dt = Math.max(0.016, (newest.time - oldest.time) / 1000);
+      const delta = newest.pos.clone().sub(oldest.pos);
+      const computedVel = delta.divideScalar(dt).multiplyScalar(1.2);
+
+      // Ensure forward throwing momentum
+      if (computedVel.z >= -1.0) {
+        computedVel.z = -Math.max(4.0, Math.hypot(computedVel.x, computedVel.y) * 1.25);
+      }
+      computedVel.y = Math.max(1.8, computedVel.y + 0.5);
+      throwVelocity.copy(computedVel);
     }
 
-    this.pitchBallWithVelocity(pitchVelocity);
-    this.interactiveBall.position.copy(STAND_POS);
-    this.interactiveBall.position.y += BALL_RADIUS + 0.02;
+    this.pitchBallWithVelocity(throwVelocity, this.interactiveBall.position);
+    this.hideAndRespawnBall();
   }
 
   onTouchStart(e) {
@@ -637,18 +690,33 @@ class CarnivalGameScene extends xb.Script {
     }
   }
 
-  pitchBallWithVelocity(velocity) {
+  hideAndRespawnBall() {
+    this.interactiveBall.visible = false;
+    if (this.respawnTimer) clearTimeout(this.respawnTimer);
+
+    if (this.ballsRemaining > 0) {
+      this.respawnTimer = setTimeout(() => {
+        this.interactiveBall.position.copy(STAND_POS);
+        this.interactiveBall.position.y += BALL_RADIUS + 0.03;
+        this.interactiveBall.visible = true;
+      }, 450);
+    }
+  }
+
+  pitchBallWithVelocity(velocity, customSpawnPos = null) {
     if (this.ballsRemaining <= 0) return;
 
     this.ballsRemaining--;
     this.updateUI();
     this.audio.playWhoosh();
 
-    const spawnPos = new THREE.Vector3(
-      this.interactiveBall.position.x,
-      this.interactiveBall.position.y + 0.08,
-      this.interactiveBall.position.z
-    );
+    const spawnPos = customSpawnPos
+      ? customSpawnPos.clone()
+      : new THREE.Vector3(
+          STAND_POS.x,
+          STAND_POS.y + BALL_RADIUS + 0.05,
+          STAND_POS.z
+        );
 
     const ballMesh = new THREE.Mesh(
       new THREE.SphereGeometry(BALL_RADIUS, 24, 24),
@@ -669,9 +737,9 @@ class CarnivalGameScene extends xb.Script {
     });
     ballBody.velocity.set(velocity.x, velocity.y, velocity.z);
     ballBody.angularVelocity.set(
-      (Math.random() - 0.5) * 20,
-      (Math.random() - 0.5) * 20,
-      (Math.random() - 0.5) * 20
+      (Math.random() - 0.5) * 15,
+      (Math.random() - 0.5) * 15,
+      (Math.random() - 0.5) * 15
     );
 
     // Collision audio on ball impact with can or table
@@ -690,25 +758,28 @@ class CarnivalGameScene extends xb.Script {
 
     const speed = (this.pitchPower + Math.random() * 0.4) * powerMultiplier;
     const target = new THREE.Vector3(
-      (Math.random() - 0.5) * 0.18,
+      (Math.random() - 0.5) * 0.16,
       TABLE_Y + CAN_HEIGHT + 0.08,
       TABLE_Z
     );
-    const start = new THREE.Vector3(0, 1.35, -0.65);
+    const start = this.interactiveBall.visible
+      ? this.interactiveBall.position.clone()
+      : new THREE.Vector3(STAND_POS.x, STAND_POS.y + 0.1, STAND_POS.z);
     const delta = target.clone().sub(start);
     const time = delta.length() / speed;
 
     const vel = delta.divideScalar(time);
     vel.y += 0.5 * 9.82 * time;
 
-    this.pitchBallWithVelocity(vel);
+    this.pitchBallWithVelocity(vel, start);
+    this.hideAndRespawnBall();
   }
 
   setupSpatialUI() {
     this.scoreText = new xb.UIText({
       text: 'SCORE: 0',
       style: {
-        fontSize: 30,
+        fontSize: 26,
         fontWeight: 'bold',
         color: '#ffea00',
         textAlign: 'center',
@@ -718,7 +789,7 @@ class CarnivalGameScene extends xb.Script {
     this.ballsText = new xb.UIText({
       text: `BALLS: ${this.ballsRemaining}`,
       style: {
-        fontSize: 22,
+        fontSize: 20,
         fontWeight: 'bold',
         color: '#ffffff',
         textAlign: 'center',
@@ -726,9 +797,9 @@ class CarnivalGameScene extends xb.Script {
     });
 
     this.statusText = new xb.UIText({
-      text: 'Grab & toss with VR hand, swipe mouse, or press Pitch!',
+      text: 'Grab ball directly to throw, or use Pitch button!',
       style: {
-        fontSize: 15,
+        fontSize: 14,
         color: '#b0bec5',
         textAlign: 'center',
         lineHeight: 1.3,
@@ -741,42 +812,44 @@ class CarnivalGameScene extends xb.Script {
       max: 9.0,
       step: 0.5,
       value: this.pitchPower,
-      style: { width: '100%', height: 36 },
+      style: { width: '100%', height: 32 },
       onInput: (val) => {
         this.pitchPower = val;
       },
     });
 
     const pitchBtn = new xb.UIButton({
-      label: 'Pitch Ball',
+      label: 'Toss Ball',
       icon: 'sports_baseball',
-      style: { flexGrow: 1 },
+      style: { flexGrow: 1, padding: 10 },
       onClick: () => this.pitchTowardsCans(1.0),
     });
 
     const resetBtn = new xb.UIButton({
-      label: 'Reset Cans',
+      label: 'Reset',
       icon: 'restart_alt',
-      style: { flexGrow: 1 },
+      style: { flexGrow: 1, padding: 10 },
       onClick: () => this.resetGame(),
     });
 
     this.uiCard = new xb.UICard({
-      size: { width: 0.65, height: 'auto' },
+      size: { width: 0.44, height: 'auto' },
       manipulation: true,
       edge: { scale: true },
       style: {
         flexDirection: 'column',
-        gap: 12,
-        padding: 18,
-        backgroundColor: 'rgba(15, 23, 42, 0.92)',
-        borderRadius: 20,
+        gap: 10,
+        padding: 16,
+        backgroundColor: 'rgba(15, 23, 42, 0.94)',
+        borderRadius: 18,
+        borderWidth: 2,
+        borderColor: 'rgba(255, 255, 255, 0.15)',
       },
       children: [
         new xb.UIText({
-          text: '🎪 CARNIVAL TOSS',
+          text: '🎪 CAN TOSS',
           style: {
-            fontSize: 32,
+            fontSize: 24,
             fontWeight: 'bold',
             textAlign: 'center',
             color: '#ff5252',
@@ -790,22 +863,24 @@ class CarnivalGameScene extends xb.Script {
             width: '100%',
             flexDirection: 'row',
             justifyContent: 'space-between',
-            marginTop: 4,
+            alignItems: 'center',
+            marginTop: 2,
           },
           children: [
-            new xb.UIText({ text: 'Pitch Power', style: { fontSize: 16 } }),
+            new xb.UIText({ text: 'Power', style: { fontSize: 14, color: '#eceff1' } }),
           ],
         }),
         this.powerSlider,
         new xb.UIPanel({
-          style: { width: '100%', flexDirection: 'row', gap: 10 },
+          style: { width: '100%', flexDirection: 'row', gap: 8 },
           children: [pitchBtn, resetBtn],
         }),
       ],
     });
 
-    this.uiCard.position.set(-0.85, 1.45, -1.2);
-    this.uiCard.rotation.y = 0.32;
+    // Ergonomically placed right next to the player at arm's reach console height
+    this.uiCard.position.set(-0.32, 1.02, -0.52);
+    this.uiCard.rotation.set(-0.16, 0.42, 0);
     this.add(this.uiCard);
   }
 
@@ -847,7 +922,8 @@ class CarnivalGameScene extends xb.Script {
     this.ballsRemaining = INITIAL_BALLS;
     this.knockedCount = 0;
     this.interactiveBall.position.copy(STAND_POS);
-    this.interactiveBall.position.y += BALL_RADIUS + 0.02;
+    this.interactiveBall.position.y += BALL_RADIUS + 0.03;
+    this.interactiveBall.visible = true;
     this.updateUI();
   }
 
@@ -870,35 +946,34 @@ class CarnivalGameScene extends xb.Script {
         visual.group.position.copy(controller.position);
         visual.group.quaternion.copy(controller.quaternion);
 
-        // Track velocity
+        // Track velocity buffer for realistic 6DoF hand throwing
         const prev = this.lastControllerPositions.get(controller) || controller.position.clone();
         const vel = controller.position.clone().sub(prev).divideScalar(Math.max(0.001, dt));
         this.lastControllerPositions.set(controller, controller.position.clone());
 
         // Check grabbing interaction with the baseball on pedestal
         const distToBall = controller.position.distanceTo(this.interactiveBall.position);
-        const isTriggerPressed = Boolean(controller.userData?.selected);
+        const isTriggerOrGrip = Boolean(controller.userData?.selected || controller.userData?.squeezed);
 
-        if (distToBall < 0.18 && isTriggerPressed && !this.isGrabbingInteractiveBall) {
+        if (distToBall < 0.16 && isTriggerOrGrip && !this.isGrabbingInteractiveBall && this.interactiveBall.visible) {
           this.isGrabbingInteractiveBall = true;
           this.grabbedController = controller;
         }
 
-        // Grabbing update
+        // Grabbing update: stick ball to controller/hand
         if (this.isGrabbingInteractiveBall && this.grabbedController === controller) {
           this.interactiveBall.position.copy(controller.position);
 
-          // On release: throw!
-          if (!isTriggerPressed) {
+          // On release: natural 6DOF throw with hand momentum!
+          if (!isTriggerOrGrip) {
             this.isGrabbingInteractiveBall = false;
             this.grabbedController = null;
-            let throwVel = vel.clone().multiplyScalar(1.5);
-            if (throwVel.length() < 1.5) {
-              throwVel = new THREE.Vector3(0, 2.8, -5.5);
+            let throwVel = vel.clone().multiplyScalar(1.4);
+            if (throwVel.length() < 1.2) {
+              throwVel = new THREE.Vector3(0, 2.6, -5.2);
             }
-            this.pitchBallWithVelocity(throwVel);
-            this.interactiveBall.position.copy(STAND_POS);
-            this.interactiveBall.position.y += BALL_RADIUS + 0.02;
+            this.pitchBallWithVelocity(throwVel, controller.position);
+            this.hideAndRespawnBall();
           }
         }
       } else {
