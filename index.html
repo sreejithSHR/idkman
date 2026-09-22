@@ -1,11 +1,8 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <title>Infinite Wireloop | XR Blocks</title>
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0, user-scalable=no"
-    />
+    <title>Goalkeeper VR | XR Blocks</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
     <link type="text/css" rel="stylesheet" href="https://xrblocks.github.io/css/xr.css" />
     <script>
       window.litDisableBundleWarning = true;
@@ -29,244 +26,251 @@
       }
     </script>
   </head>
-  <body style="background-color: #050510;">
+  <body>
     <script type="module">
       import * as THREE from 'three';
       import * as xb from 'xrblocks';
 
-      // Custom Curve for procedural infinite wire generation
-      class WireCurve extends THREE.Curve {
-        constructor(timeOffset = 0, difficulty = 1.0) {
+      class GoaleeVR extends xb.Script {
+        constructor() {
           super();
-          this.timeOffset = timeOffset;
-          this.difficulty = difficulty;
-        }
-
-        getPoint(t, optionalTarget = new THREE.Vector3()) {
-          // t ranges from 0 to 1. Map this to a Z depth from +1 to -20 meters
-          const z = 1.0 - t * 21.0; 
-          
-          // Generate wavy patterns using sine and cosine functions.
-          // timeOffset propagates the wave towards the user.
-          const wave1 = Math.sin(z * 0.8 + this.timeOffset * 2.0);
-          const wave2 = Math.cos(z * 1.5 + this.timeOffset * 1.3);
-          const wave3 = Math.sin(z * 0.4 - this.timeOffset * 1.0);
-
-          const x = (wave1 * 0.4 + wave2 * 0.15) * this.difficulty;
-          const y = 1.4 + (wave3 * 0.4 + wave1 * 0.1) * this.difficulty;
-
-          return optionalTarget.set(x, y, z);
-        }
-      }
-
-      class WireloopGame extends xb.Script {
-        init() {
-          // Game Constants & State
-          this.isPlaying = false;
           this.score = 0;
-          this.timeOffset = 0;
-          this.baseSpeed = 1.5;
-          this.difficulty = 0.2; // Starts easy, gets harder
-          this.loopRadius = 0.12;
-          this.wireRadius = 0.015;
+          this.isPlaying = false;
+          this.balls = [];
+          this.spawnTimer = 0;
+          this.spawnInterval = 2.0;
           
-          this.setupEnvironment();
-          this.setupUI();
-          this.setupWireAndLoop();
+          this.ballGeometry = new THREE.IcosahedronGeometry(0.12, 2);
+          this.ballMaterial = new THREE.MeshStandardMaterial({ color: 0xff3333, roughness: 0.3, metalness: 0.1 });
+          this.indicatorMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 });
         }
 
-        setupEnvironment() {
-          // Ambient and directional lighting for the glowing neon feel
-          this.add(new THREE.AmbientLight(0xffffff, 0.2));
+        init() {
+          // Add lighting
+          this.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2));
           const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
-          dirLight.position.set(0, 5, 2);
+          dirLight.position.set(0, 5, -2);
           this.add(dirLight);
 
-          // Add a subtle floor grid for depth perception
-          const grid = new THREE.GridHelper(40, 40, 0x003366, 0x001133);
-          grid.position.y = 0;
-          this.add(grid);
+          this.buildGoal();
+          this.buildUI();
         }
 
-        setupUI() {
+        buildGoal() {
+          this.goalGroup = new THREE.Group();
+          
+          const postMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 });
+          const postGeo = new THREE.CylinderGeometry(0.06, 0.06, 2.5, 16);
+          
+          const leftPost = new THREE.Mesh(postGeo, postMat);
+          leftPost.position.set(-1.5, 1.25, 0);
+          
+          const rightPost = new THREE.Mesh(postGeo, postMat);
+          rightPost.position.set(1.5, 1.25, 0);
+          
+          const crossGeo = new THREE.CylinderGeometry(0.06, 0.06, 3.12, 16);
+          const crossbar = new THREE.Mesh(crossGeo, postMat);
+          crossbar.rotation.z = Math.PI / 2;
+          crossbar.position.set(0, 2.5, 0);
+
+          // Indicator for hits/misses (flashes green/red)
+          const indicatorGeo = new THREE.PlaneGeometry(5, 5);
+          this.indicatorMesh = new THREE.Mesh(indicatorGeo, this.indicatorMaterial);
+          this.indicatorMesh.position.set(0, 1.5, 1);
+          this.indicatorMesh.xb = { pointerEvents: 'none', interactionEnabled: false };
+
+          this.goalGroup.add(leftPost, rightPost, crossbar, this.indicatorMesh);
+          this.add(this.goalGroup);
+        }
+
+        buildUI() {
           this.scoreText = new xb.UIText({
             text: 'Score: 0',
-            style: { fontSize: 32, fontWeight: 'bold', color: '#00ffff', textAlign: 'center' }
+            style: { fontSize: 42, fontWeight: 'bold', textAlign: 'center' }
           });
 
           this.statusText = new xb.UIText({
-            text: 'Thread the ring over the wire.\nAvoid touching it!',
-            style: { fontSize: 18, color: '#aaaaaa', textAlign: 'center', lineHeight: 1.4 }
+            text: 'Block the penalty kicks!',
+            style: { fontSize: 20, opacity: 0.8, textAlign: 'center' }
           });
 
-          this.startButton = new xb.UIButton({
-            label: 'START GAME',
-            icon: 'play_arrow',
-            onClick: () => this.startGame(),
-            style: { width: '100%', marginTop: 20, backgroundColor: '#e91e63' }
+          this.actionButton = new xb.UIButton({
+            label: 'Start Game',
+            icon: 'sports_soccer',
+            style: { width: '100%', height: 60, fontSize: 24 },
+            onClick: () => this.toggleGame()
           });
 
           this.uiCard = new xb.UICard({
             size: { width: 0.6, height: 'auto' },
-            manipulation: false, // Locked in place
-            style: { 
-              flexDirection: 'column', 
-              padding: 24, 
-              gap: 12,
-              backgroundColor: 'rgba(10, 10, 25, 0.85)',
-              borderRadius: 16,
-              borderWidth: 2,
-              borderColor: '#00ffff'
+            manipulation: true,
+            style: {
+              flexDirection: 'column',
+              gap: 20,
+              padding: 30,
+              alignItems: 'center',
+              backgroundColor: 'rgba(20, 30, 40, 0.85)'
             },
             children: [
-              new xb.UIText({ text: 'WIRELOOP VR', style: { fontSize: 42, fontWeight: 'black', color: '#ffffff', textAlign: 'center' } }),
+              new xb.UIText({
+                text: 'GOALKEEPER VR',
+                style: { fontSize: 32, fontWeight: 'bold', color: '#66ccff' }
+              }),
               this.scoreText,
               this.statusText,
-              this.startButton
+              this.actionButton
             ]
           });
 
-          // Position UI above and behind the primary gameplay area
-          this.uiCard.position.set(0, 2.2, -3.0);
+          // Place the UI directly in front of the user so it's easily visible
+          this.uiCard.position.set(0, 1.4, -1.2);
           this.add(this.uiCard);
         }
 
-        setupWireAndLoop() {
-          // Create the Loop (attached to controller later)
-          const loopGeom = new THREE.TorusGeometry(this.loopRadius, 0.008, 16, 64);
-          this.loopMat = new THREE.MeshStandardMaterial({ 
-            color: 0x00ffff, 
-            emissive: 0x00ffff, 
-            emissiveIntensity: 0.8,
-            roughness: 0.2
-          });
-          this.loopMesh = new THREE.Mesh(loopGeom, this.loopMat);
-          
-          // Add a smaller inner ring to indicate the sweet spot
-          const innerLoop = new THREE.Mesh(
-            new THREE.TorusGeometry(this.loopRadius - this.wireRadius, 0.002, 8, 32),
-            new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.3 })
-          );
-          this.loopMesh.add(innerLoop);
-          this.add(this.loopMesh);
-
-          // Create the initial Wire
-          this.wireMat = new THREE.MeshStandardMaterial({
-            color: 0xff00ff,
-            emissive: 0xe91e63,
-            emissiveIntensity: 1.0,
-            roughness: 0.4
-          });
-          this.wireMesh = new THREE.Mesh(this.generateWireGeometry(), this.wireMat);
-          this.add(this.wireMesh);
-        }
-
-        generateWireGeometry() {
-          const curve = new WireCurve(this.timeOffset, this.difficulty);
-          // 150 segments along the length, 8 radial segments
-          return new THREE.TubeGeometry(curve, 150, this.wireRadius, 8, false);
+        toggleGame() {
+          if (this.isPlaying) {
+            this.stopGame();
+          } else {
+            this.startGame();
+          }
         }
 
         startGame() {
           this.isPlaying = true;
           this.score = 0;
-          this.timeOffset = 0;
-          this.difficulty = 0.2;
-          
-          this.scoreText.text = 'Score: 0';
-          this.statusText.text = 'Stay centered!';
-          this.startButton.style.display = 'none';
-          
-          // Reset visual materials to playing state
-          this.loopMat.color.setHex(0x00ffff);
-          this.loopMat.emissive.setHex(0x00ffff);
-          this.wireMat.emissive.setHex(0xe91e63);
+          this.spawnTimer = 0;
+          this.spawnInterval = 2.0;
+          this.updateScoreUI();
+          this.statusText.text = 'Game active. Get ready!';
+          this.actionButton.label = 'Stop Game';
+          this.actionButton.icon = 'stop';
         }
 
-        gameOver() {
+        stopGame() {
           this.isPlaying = false;
+          this.statusText.text = 'Game stopped.';
+          this.actionButton.label = 'Start Game';
+          this.actionButton.icon = 'sports_soccer';
           
-          this.statusText.text = 'CRASH! Game Over.';
-          this.startButton.label = 'TRY AGAIN';
-          this.startButton.icon = 'refresh';
-          this.startButton.style.display = 'flex';
-
-          // Visual feedback for crash
-          this.loopMat.color.setHex(0xff0000);
-          this.loopMat.emissive.setHex(0xff0000);
-          this.wireMat.emissive.setHex(0xff0000);
+          // Clear remaining balls
+          this.balls.forEach(ball => this.remove(ball));
+          this.balls = [];
         }
 
-        update(delta) {
-          // Track the primary controller (or fallback)
-          const controller = xb.core.input.controllers[0];
+        spawnBall() {
+          const ball = new THREE.Mesh(this.ballGeometry, this.ballMaterial);
           
-          if (controller) {
-            // Smoothly move the loop to the controller's position
-            this.loopMesh.position.lerp(controller.position, 0.5);
-            this.loopMesh.quaternion.slerp(controller.quaternion, 0.5);
-          } else {
-            // Default position if no controller is detected yet
-            this.loopMesh.position.set(0, 1.4, -0.5);
-          }
-
-          if (this.isPlaying) {
-            // 1. Advance the game state
-            this.timeOffset += this.baseSpeed * delta;
-            this.difficulty = Math.min(1.5, this.difficulty + delta * 0.02); // Max difficulty cap
-            this.score += delta * 100 * this.difficulty;
-            this.scoreText.text = `Score: ${Math.floor(this.score)}`;
-
-            // 2. Update Wire Geometry procedurally
-            const oldGeo = this.wireMesh.geometry;
-            this.wireMesh.geometry = this.generateWireGeometry();
-            oldGeo.dispose();
-
-            // 3. Collision Detection
-            this.checkCollision(this.loopMesh.position);
-          }
+          // Spawn position far out in front
+          const startX = (Math.random() - 0.5) * 4;
+          const startY = Math.random() * 1.5 + 0.2;
+          const startZ = -9;
+          
+          ball.position.set(startX, startY, startZ);
+          
+          // Calculate velocity towards the goal area
+          const targetX = (Math.random() - 0.5) * 2.8; // within the posts
+          const targetY = Math.random() * 2.0 + 0.3; // below crossbar
+          const targetZ = 0;
+          
+          const speed = 4.0 + Math.random() * 2.0; // varying speeds
+          
+          const direction = new THREE.Vector3(targetX - startX, targetY - startY, targetZ - startZ).normalize();
+          ball.userData.velocity = direction.multiplyScalar(speed);
+          
+          this.add(ball);
+          this.balls.push(ball);
         }
 
-        checkCollision(loopPos) {
-          // We only check for collision if the loop is within the active wire Z-range
-          if (loopPos.z <= 1.0 && loopPos.z >= -20.0) {
-            // Reverse engineering 't' from the curve logic: z = 1.0 - t * 21.0
-            const t = (1.0 - loopPos.z) / 21.0;
-            
-            // Get the exact center of the wire at the loop's current Z depth
-            const curve = new WireCurve(this.timeOffset, this.difficulty);
-            const wirePoint = curve.getPoint(t);
+        updateScoreUI() {
+          this.scoreText.text = `Score: ${this.score}`;
+        }
 
-            // Calculate distance in the XY plane between loop center and wire center
-            const dx = loopPos.x - wirePoint.x;
-            const dy = loopPos.y - wirePoint.y;
-            const distanceXY = Math.sqrt(dx * dx + dy * dy);
+        flashIndicator(hexColor) {
+          this.indicatorMaterial.color.setHex(hexColor);
+          this.indicatorMaterial.opacity = 0.4;
+        }
 
-            // If the distance is greater than the loop's inner radius minus wire radius, it's a hit.
-            const tolerance = this.loopRadius - this.wireRadius;
-            if (distanceXY > tolerance) {
-              this.gameOver();
+        update() {
+          const delta = xb.getDeltaTime();
+          
+          // Fade out the indicator screen
+          if (this.indicatorMaterial.opacity > 0) {
+            this.indicatorMaterial.opacity = Math.max(0, this.indicatorMaterial.opacity - delta * 0.8);
+          }
+
+          if (!this.isPlaying) return;
+
+          // Spawning logic
+          this.spawnTimer += delta;
+          if (this.spawnTimer >= this.spawnInterval) {
+            this.spawnBall();
+            this.spawnTimer = 0;
+            // Gradually increase difficulty
+            this.spawnInterval = Math.max(0.6, this.spawnInterval - 0.05);
+          }
+
+          // Ball movement and collision logic
+          for (let i = this.balls.length - 1; i >= 0; i--) {
+            const ball = this.balls[i];
+            ball.position.addScaledVector(ball.userData.velocity, delta);
+
+            // Spin the ball for realism
+            ball.rotation.x += delta * 5;
+            ball.rotation.z += delta * 3;
+
+            // Collision detection with hands/controllers
+            let caught = false;
+            for (const controller of xb.core.input.controllers) {
+              // 0.3 meters radius is forgiving enough to simulate hand blocking easily
+              if (ball.position.distanceTo(controller.position) < 0.3) {
+                caught = true;
+                break;
+              }
+            }
+
+            if (caught) {
+              this.score += 1;
+              this.flashIndicator(0x00ff00); // Flash green
+              this.removeBall(ball, i);
+              this.updateScoreUI();
+            } else if (ball.position.z > 0.5) {
+              // Passed the goal line
+              this.score -= 1;
+              this.flashIndicator(0xff0000); // Flash red
+              this.removeBall(ball, i);
+              this.updateScoreUI();
             }
           }
         }
 
+        removeBall(ball, index) {
+          this.remove(ball);
+          if (ball.geometry) ball.geometry.dispose();
+          if (ball.material) ball.material.dispose();
+          this.balls.splice(index, 1);
+        }
+
         dispose() {
-          this.wireMesh.geometry.dispose();
-          this.wireMat.dispose();
-          this.loopMesh.geometry.dispose();
-          this.loopMat.dispose();
+          this.stopGame();
+          this.ballGeometry.dispose();
+          this.ballMaterial.dispose();
+          this.indicatorMaterial.dispose();
         }
       }
 
-      document.addEventListener('DOMContentLoaded', () => {
+      document.addEventListener('DOMContentLoaded', async () => {
         const options = new xb.Options();
-        options.setAppTitle('Infinite Wireloop');
-        options.setAppDescription('Thread the ring along an infinite, procedurally flowing wire.');
-        // CONTROLLER mode maps desktop mouse to the controller position, great for this game type.
-        options.simulator.defaultMode = xb.SimulatorMode.CONTROLLER;
+        options.setAppTitle('Goalkeeper VR');
+        options.setAppDescription('Use your hands to catch the penalty balls before they enter the goal.');
         
-        xb.add(new WireloopGame());
-        xb.init(options);
+        // Enable hands tracking for the ultimate blocking experience
+        options.enableHands();
+        options.hands.visualization = true;
+        options.hands.visualizeMeshes = true;
+        options.simulator.defaultMode = xb.SimulatorMode.POSE;
+        
+        xb.add(new GoaleeVR());
+        await xb.init(options);
       });
     </script>
   </body>
