@@ -2,15 +2,23 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>WIRELOOP | Rhythm WebXR Steady-Hand Game</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-    <link type="text/css" rel="stylesheet" href="https://xrblocks.github.io/css/xr.css" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, user-scalable=no"
+    />
+    <title>Carnival Ball Toss XR</title>
+    <link
+      type="text/css"
+      rel="stylesheet"
+      href="https://xrblocks.github.io/css/xr.css"
+    />
     <script>
       window.litDisableBundleWarning = true;
     </script>
     <script type="importmap">
       {
         "imports": {
+          "@dimforge/rapier3d-simd-compat": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-simd-compat@0.19.2/rapier.mjs",
           "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
           "three/": "https://cdn.jsdelivr.net/npm/three@0.184.0/",
           "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/",
@@ -21,7 +29,8 @@
           "yoga-layout/load": "https://cdn.jsdelivr.net/npm/yoga-layout@3.2.1/dist/src/load.js",
           "lit": "https://esm.sh/lit@3.3.1",
           "lit/": "https://esm.sh/lit@3.3.1/",
-          "xrblocks": "https://cdn.jsdelivr.net/npm/xrblocks@0.21.1/build/xrblocks.js"
+          "xrblocks": "https://cdn.jsdelivr.net/npm/xrblocks@0.21.1/build/xrblocks.js",
+          "xrblocks/addons/": "https://cdn.jsdelivr.net/npm/xrblocks@0.21.1/build/addons/"
         }
       }
     </script>
@@ -29,7 +38,9 @@
       body {
         margin: 0;
         overflow: hidden;
-        background-color: #040810;
+        user-select: none;
+        -webkit-user-select: none;
+        background-color: #0b0f19;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       }
     </style>
@@ -37,844 +48,920 @@
 
   <body>
     <script type="module">
-      import * as THREE from 'three';
-      import * as xb from 'xrblocks';
-
-      const LOOP_CONFIG = {
-        POOL_SIZE: 8,
-        SPAWN_Z: -15.0,
-        DESPAWN_Z: 1.5,
-        PLAYER_DEFAULT_Z: 0.0,
-        REACH_BOUNDS_X: { min: -0.55, max: 0.55 },
-        REACH_BOUNDS_Y: { min: 1.1, max: 1.65 },
-        BASE_SPEED: 4.5, // units/sec
-        MAX_SPEED_BONUS: 4.0, // max speed increment
-        SPEED_SCORE_SCALE: 0.02, // speed += min(maxBonus, score * scale)
-        BASE_SPAWN_INTERVAL: 2.2, // seconds
-        MIN_SPAWN_INTERVAL: 1.0, // seconds
-        DIFFICULTY_RAMP_SCORE: 100, // score at which min spawn interval is reached
-        
-        // Loop Geometry Settings
-        OUTER_RADIUS: 0.28,
-        TUBE_RADIUS: 0.015,
-        CONTROL_POINTS: 16,
-        BEND_INTENSITY: 0.065,
-        CURVE_SAMPLE_COUNT: 40, // M samples for distance check
-        SAFETY_MARGIN: 0.02, // inner clear aperture margin
-        
-        // Wand Settings
-        WAND_TIP_RADIUS: 0.009,
-        WAND_LENGTH: 0.28
-      };
-
-      const GAME_STATES = {
-        MENU: 'MENU',
-        PLAYING: 'PLAYING',
-        GAME_OVER: 'GAME_OVER'
-      };
-
-      class SoundSynthesizer {
-        constructor() {
-          this.ctx = null;
-        }
-
-        initContext() {
-          if (!this.ctx) {
-            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-            if (AudioContextClass) this.ctx = new AudioContextClass();
-          }
-          if (this.ctx && this.ctx.state === 'suspended') {
-            this.ctx.resume();
-          }
-        }
-
-        playSuccess() {
-          this.initContext();
-          if (!this.ctx) return;
-          const now = this.ctx.currentTime;
-          [587.33, 880.0, 1174.66].forEach((freq, i) => {
-            const osc = this.ctx.createOscillator();
-            const gain = this.ctx.createGain();
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(freq, now + i * 0.04);
-            gain.gain.setValueAtTime(0.2, now + i * 0.04);
-            gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.04 + 0.25);
-            osc.connect(gain);
-            gain.connect(this.ctx.destination);
-            osc.start(now + i * 0.04);
-            osc.stop(now + i * 0.04 + 0.25);
-          });
-        }
-
-        playFail() {
-          this.initContext();
-          if (!this.ctx) return;
-          const now = this.ctx.currentTime;
-          const osc = this.ctx.createOscillator();
-          const gain = this.ctx.createGain();
-          osc.type = 'sawtooth';
-          osc.frequency.setValueAtTime(140, now);
-          osc.frequency.linearRampToValueAtTime(45, now + 0.25);
-          gain.gain.setValueAtTime(0.35, now);
-          gain.gain.exponentialRampToValueAtTime(0.005, now + 0.25);
-          osc.connect(gain);
-          gain.connect(this.ctx.destination);
-          osc.start(now);
-          osc.stop(now + 0.25);
-
-          // Voltage noise zap
-          const bufferSize = Math.floor(this.ctx.sampleRate * 0.15);
-          const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-          const data = buffer.getChannelData(0);
-          for (let i = 0; i < bufferSize; i++) {
-            data[i] = (Math.random() * 2 - 1) * 0.35;
-          }
-          const noise = this.ctx.createBufferSource();
-          noise.buffer = buffer;
-          const noiseGain = this.ctx.createGain();
-          noiseGain.gain.setValueAtTime(0.3, now);
-          noiseGain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
-          noise.connect(noiseGain);
-          noiseGain.connect(this.ctx.destination);
-          noise.start(now);
-        }
-
-        playMiss() {
-          this.initContext();
-          if (!this.ctx) return;
-          const now = this.ctx.currentTime;
-          const osc = this.ctx.createOscillator();
-          const gain = this.ctx.createGain();
-          osc.type = 'triangle';
-          osc.frequency.setValueAtTime(240, now);
-          osc.frequency.exponentialRampToValueAtTime(80, now + 0.18);
-          gain.gain.setValueAtTime(0.12, now);
-          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
-          osc.connect(gain);
-          gain.connect(this.ctx.destination);
-          osc.start(now);
-          osc.stop(now + 0.18);
-        }
-      }
-
-      class BentLoopInstance extends THREE.Group {
-        constructor(id) {
-          super();
-          this.id = id;
-          this.active = false;
-          this.hasPassedPlane = false;
-          this.resolved = false; // hit or fail already processed
-          this.previousWandPlaneDot = 0;
-          this.hasPreviousDot = false;
-          this.speed = LOOP_CONFIG.BASE_SPEED;
-
-          // Local curve & pre-sampled local points
-          this.curve = null;
-          this.localSampledPoints = [];
-          this.worldSampledPoints = [];
-          for (let i = 0; i < LOOP_CONFIG.CURVE_SAMPLE_COUNT; i++) {
-            this.worldSampledPoints.push(new THREE.Vector3());
-          }
-
-          // Pre-allocated math helpers for zero GC during collision
-          this.localNormal = new THREE.Vector3(0, 0, 1);
-          this.worldNormal = new THREE.Vector3(0, 0, 1);
-          this.worldCenter = new THREE.Vector3();
-          this.effectiveInnerRadius = LOOP_CONFIG.OUTER_RADIUS - LOOP_CONFIG.TUBE_RADIUS - LOOP_CONFIG.SAFETY_MARGIN;
-
-          // Visual meshes
-          this.material = new THREE.MeshStandardMaterial({
-            color: 0x00e5ff,
-            metalness: 0.85,
-            roughness: 0.25,
-            emissive: 0x004488,
-            emissiveIntensity: 0.35,
-          });
-
-          this.mesh = new THREE.Mesh(new THREE.BufferGeometry(), this.material);
-          this.add(this.mesh);
-
-          // Success indicator aura
-          this.auraMat = new THREE.MeshBasicMaterial({
-            color: 0x00ff88,
-            transparent: true,
-            opacity: 0.0,
-            side: THREE.DoubleSide
-          });
-          this.auraMesh = new THREE.Mesh(
-            new THREE.RingGeometry(this.effectiveInnerRadius * 0.9, LOOP_CONFIG.OUTER_RADIUS * 1.1, 32),
-            this.auraMat
-          );
-          this.add(this.auraMesh);
-
-          // Fragment burst pieces for shatter on fail
-          this.fragments = [];
-          const fragGeo = new THREE.BoxGeometry(0.02, 0.02, 0.06);
-          const fragMat = new THREE.MeshBasicMaterial({ color: 0xff1744 });
-          for (let i = 0; i < 12; i++) {
-            const frag = new THREE.Mesh(fragGeo, fragMat.clone());
-            frag.visible = false;
-            frag.userData = { vel: new THREE.Vector3(), rotSpeed: new THREE.Vector3(), life: 0 };
-            this.add(frag);
-            this.fragments.push(frag);
-          }
-
-          this.rebuildGeometry();
-          this.visible = false;
-        }
-
-        rebuildGeometry() {
-          // 1. Generate Perturbed Closed 3D Curve
-          const points = [];
-          const N = LOOP_CONFIG.CONTROL_POINTS;
-          const baseR = LOOP_CONFIG.OUTER_RADIUS;
-          const bend = LOOP_CONFIG.BEND_INTENSITY;
-
-          // Randomized harmonic phase offsets
-          const phase1 = Math.random() * Math.PI * 2;
-          const phase2 = Math.random() * Math.PI * 2;
-          const phaseZ = Math.random() * Math.PI * 2;
-
-          for (let i = 0; i < N; i++) {
-            const theta = (i / N) * Math.PI * 2;
-            // Radial perturbations via multi-sine harmonics
-            const rPerturb = Math.sin(theta * 2 + phase1) * (bend * 0.6) +
-                             Math.cos(theta * 3 + phase2) * (bend * 0.4);
-            const r = baseR + rPerturb;
-
-            // Non-flat Z/axis bend (curling hoop)
-            const zPerturb = Math.sin(theta * 2 + phaseZ) * bend +
-                             Math.cos(theta * 4 + phase1) * (bend * 0.5);
-
-            points.push(new THREE.Vector3(
-              Math.cos(theta) * r,
-              Math.sin(theta) * r,
-              zPerturb
-            ));
-          }
-
-          // Closed CatmullRomCurve3
-          this.curve = new THREE.CatmullRomCurve3(points, true, 'centripetal');
-
-          // Build Tube Mesh
-          if (this.mesh.geometry) this.mesh.geometry.dispose();
-          this.mesh.geometry = new THREE.TubeGeometry(
-            this.curve,
-            64,
-            LOOP_CONFIG.TUBE_RADIUS,
-            8,
-            true
-          );
-
-          // Cache M sampled local points along the curve
-          this.localSampledPoints = [];
-          for (let i = 0; i < LOOP_CONFIG.CURVE_SAMPLE_COUNT; i++) {
-            const t = i / LOOP_CONFIG.CURVE_SAMPLE_COUNT;
-            this.localSampledPoints.push(this.curve.getPointAt(t));
-          }
-        }
-
-        spawn(x, y, speed, colorHex) {
-          this.position.set(x, y, LOOP_CONFIG.SPAWN_Z);
-          
-          // Randomize orientation angles so loop approaches with 3D tilt
-          this.rotation.set(
-            (Math.random() - 0.5) * 0.7,
-            (Math.random() - 0.5) * 0.7,
-            Math.random() * Math.PI * 2
-          );
-
-          this.speed = speed;
-          this.material.color.setHex(colorHex || 0x00e5ff);
-          this.material.emissive.setHex(0x003366);
-          this.material.emissiveIntensity = 0.4;
-          this.auraMat.opacity = 0.0;
-          this.mesh.visible = true;
-
-          // Reset fragments
-          this.fragments.forEach(f => { f.visible = false; f.userData.life = 0; });
-
-          this.active = true;
-          this.hasPassedPlane = false;
-          this.resolved = false;
-          this.hasPreviousDot = false;
-          this.visible = true;
-          this.updateWorldMatrix(true, true);
-        }
-
-        explodeFragments(wandTipWorld) {
-          this.mesh.visible = false;
-          for (const frag of this.fragments) {
-            frag.visible = true;
-            frag.userData.life = 1.0;
-            frag.position.set(
-              (Math.random() - 0.5) * LOOP_CONFIG.OUTER_RADIUS,
-              (Math.random() - 0.5) * LOOP_CONFIG.OUTER_RADIUS,
-              (Math.random() - 0.5) * 0.05
-            );
-            frag.userData.vel.set(
-              (Math.random() - 0.5) * 2.4,
-              (Math.random() - 0.5) * 2.4,
-              (Math.random() - 0.5) * 2.0 + 1.0
-            );
-            frag.userData.rotSpeed.set(
-              (Math.random() - 0.5) * 10,
-              (Math.random() - 0.5) * 10,
-              (Math.random() - 0.5) * 10
-            );
-          }
-        }
-
-        updateFragments(dt) {
-          let anyActive = false;
-          for (const frag of this.fragments) {
-            if (frag.userData.life > 0) {
-              anyActive = true;
-              frag.userData.life -= dt * 2.2;
-              frag.position.addScaledVector(frag.userData.vel, dt);
-              frag.rotation.x += frag.userData.rotSpeed.x * dt;
-              frag.rotation.y += frag.userData.rotSpeed.y * dt;
-              frag.material.opacity = Math.max(0, frag.userData.life);
-              if (frag.userData.life <= 0) frag.visible = false;
-            }
-          }
-          return anyActive;
-        }
-
-        updateWorldSamples() {
-          // Pre-transform the M sampled points to world coordinates
-          const matrix = this.matrixWorld;
-          for (let i = 0; i < LOOP_CONFIG.CURVE_SAMPLE_COUNT; i++) {
-            this.worldSampledPoints[i].copy(this.localSampledPoints[i]).applyMatrix4(matrix);
-          }
-          this.getWorldPosition(this.worldCenter);
-          this.worldNormal.set(0, 0, 1).transformDirection(matrix).normalize();
-        }
-
-        despawn() {
-          this.active = false;
-          this.visible = false;
-          this.resolved = true;
-          this.hasPreviousDot = false;
-        }
-      }
-
-      class WireLoopGame extends xb.Script {
-        constructor() {
-          super();
-          this.sfx = new SoundSynthesizer();
-
-          // State Machine
-          this.state = GAME_STATES.MENU;
-          this.score = 0;
-          this.combo = 0;
-          this.comboMultiplier = 1;
-          this.lives = 3;
-          this.maxLives = 3;
-          this.difficultyStage = 1;
-
-          // Timing & Spawning
-          this.timeSinceLastSpawn = 0;
-          this.currentSpawnInterval = LOOP_CONFIG.BASE_SPAWN_INTERVAL;
-          this.currentLoopSpeed = LOOP_CONFIG.BASE_SPEED;
-
-          // Wand Transform Tracking (from controller or cursor ray)
-          this.wandPosition = new THREE.Vector3(0, 1.35, -0.6);
-          this.wandTipPosition = new THREE.Vector3(0, 1.35, -0.75);
-          this.wandQuaternion = new THREE.Quaternion();
-          this.activeController = null;
-
-          // Reusable Scratch Math Objects (Strictly Zero Allocations in tick)
-          this.scratchToWand = new THREE.Vector3();
-          this.scratchProjected = new THREE.Vector3();
-          this.scratchLocalWand = new THREE.Vector3();
-          this.scratchLoopPlane = new THREE.Plane();
-          this.scratchInvMatrix = new THREE.Matrix4();
-
-          // External Callback Hooks for custom audio/event integration
-          this.onSuccess = (loop, wandTip) => this.handleSuccess(loop, wandTip);
-          this.onFail = (loop, wandTip) => this.handleFail(loop, wandTip);
-          this.onMiss = (loop) => this.handleMiss(loop);
-        }
-
-        init() {
-          this.setupLighting();
-          this.setupEnvironment();
-          this.setupWandVisual();
-          this.setupLoopPool();
-          this.setupSpatialUI();
-          this.setupInputHandlers();
-        }
-
-        setupLighting() {
-          const hemi = new THREE.HemisphereLight(0x6688cc, 0x111624, 2.5);
-          this.add(hemi);
-
-          const dir = new THREE.DirectionalLight(0xffffff, 2.2);
-          dir.position.set(3, 8, 4);
-          dir.castShadow = true;
-          this.add(dir);
-
-          const pointLightL = new THREE.PointLight(0x00f0ff, 2.0, 12);
-          pointLightL.position.set(-2.0, 1.6, -5.0);
-          this.add(pointLightL);
-
-          const pointLightR = new THREE.PointLight(0xff0077, 2.0, 12);
-          pointLightR.position.set(2.0, 1.6, -5.0);
-          this.add(pointLightR);
-        }
-
-        setupEnvironment() {
-          // Cyber Tunnel Runway
-          const runwayGeo = new THREE.PlaneGeometry(3.2, 30);
-          const runwayMat = new THREE.MeshStandardMaterial({
-            color: 0x080d1a,
-            roughness: 0.6,
-            metalness: 0.7
-          });
-          const runway = new THREE.Mesh(runwayGeo, runwayMat);
-          runway.rotation.x = -Math.PI / 2;
-          runway.position.set(0, 0, -7.5);
-          this.add(runway);
-
-          const grid = new THREE.GridHelper(30, 30, 0x00f0ff, 0x1a2640);
-          grid.position.set(0, 0.01, -7.5);
-          this.add(grid);
-
-          // Side neon guide rails
-          const railGeo = new THREE.CylinderGeometry(0.015, 0.015, 30, 16);
-          const railMatL = new THREE.MeshBasicMaterial({ color: 0x00f0ff });
-          const railMatR = new THREE.MeshBasicMaterial({ color: 0xff0077 });
-
-          const leftRail = new THREE.Mesh(railGeo, railMatL);
-          leftRail.rotation.x = Math.PI / 2;
-          leftRail.position.set(-1.6, 0.05, -7.5);
-          this.add(leftRail);
-
-          const rightRail = new THREE.Mesh(railGeo, railMatR);
-          rightRail.rotation.x = Math.PI / 2;
-          rightRail.position.set(1.6, 0.05, -7.5);
-          this.add(rightRail);
-        }
-
-        setupWandVisual() {
-          this.wandGroup = new THREE.Group();
-          this.wandGroup.name = 'PlayerNeedleWand';
-
-          // Ergonomic handle
-          const handleGeo = new THREE.CylinderGeometry(0.014, 0.017, 0.16, 16);
-          const handleMat = new THREE.MeshStandardMaterial({
-            color: 0x1c2438,
-            roughness: 0.4,
-            metalness: 0.8
-          });
-          const handle = new THREE.Mesh(handleGeo, handleMat);
-          handle.rotation.x = Math.PI / 2;
-          handle.position.z = 0.08;
-          this.wandGroup.add(handle);
-
-          // Glowing crossguard
-          const guardGeo = new THREE.CylinderGeometry(0.024, 0.024, 0.015, 16);
-          const guardMat = new THREE.MeshStandardMaterial({
-            color: 0x00e5ff,
-            emissive: 0x0099cc,
-            emissiveIntensity: 0.6
-          });
-          const guard = new THREE.Mesh(guardGeo, guardMat);
-          guard.rotation.x = Math.PI / 2;
-          this.wandGroup.add(guard);
-
-          // Needle probe blade pointing forward into -Z
-          const needleGeo = new THREE.CylinderGeometry(0.003, 0.007, LOOP_CONFIG.WAND_LENGTH, 12);
-          const needleMat = new THREE.MeshStandardMaterial({
-            color: 0xffffff,
-            roughness: 0.1,
-            metalness: 0.95
-          });
-          const needle = new THREE.Mesh(needleGeo, needleMat);
-          needle.rotation.x = -Math.PI / 2;
-          needle.position.z = -LOOP_CONFIG.WAND_LENGTH / 2;
-          this.wandGroup.add(needle);
-
-          // Luminous Wand Tip Sphere
-          const tipGeo = new THREE.SphereGeometry(LOOP_CONFIG.WAND_TIP_RADIUS, 16, 16);
-          this.wandTipMat = new THREE.MeshBasicMaterial({ color: 0x00f0ff });
-          this.wandTipMesh = new THREE.Mesh(tipGeo, this.wandTipMat);
-          this.wandTipMesh.position.z = -LOOP_CONFIG.WAND_LENGTH;
-          this.wandGroup.add(this.wandTipMesh);
-
-          this.wandGroup.position.copy(this.wandPosition);
-          this.add(this.wandGroup);
-        }
-
-        setupLoopPool() {
-          this.loopPool = [];
-          for (let i = 0; i < LOOP_CONFIG.POOL_SIZE; i++) {
-            const loop = new BentLoopInstance(i);
-            this.add(loop);
-            this.loopPool.push(loop);
-          }
-        }
-
-        setupSpatialUI() {
-          this.uiTitle = new xb.UIText({
-            text: 'WIRELOOP',
-            style: { fontSize: 32, fontWeight: 'bold', color: '#00f0ff', textAlign: 'center' }
-          });
-
-          this.uiSubtitle = new xb.UIText({
-            text: 'Thread your wand cleanly through approaching warped loops!',
-            style: { fontSize: 14, color: '#90a8c8', textAlign: 'center' }
-          });
-
-          this.uiStats = new xb.UIText({
-            text: 'Score: 0   Combo: 0 (x1)   Lives: 3/3',
-            style: { fontSize: 18, fontWeight: 'bold', color: '#ffd000', textAlign: 'center' }
-          });
-
-          this.uiStatus = new xb.UIText({
-            text: 'Press START to Play',
-            style: { fontSize: 15, color: '#a0c0e0', textAlign: 'center' }
-          });
-
-          this.uiActionBtn = new xb.UIButton({
-            label: '▶ START GAME',
-            icon: 'play_arrow',
-            style: { width: '100%', height: 48, backgroundColor: '#00b0ff' },
-            onClick: () => this.handleUiAction()
-          });
-
-          this.uiCard = new xb.UICard({
-            size: { width: 0.72, height: 'auto' },
-            manipulation: false,
-            edge: false,
-            style: {
-              flexDirection: 'column',
-              gap: 12,
-              padding: 20,
-              backgroundColor: 'rgba(8, 14, 28, 0.94)',
-              borderColor: '#00d5ff',
-              borderWidth: 2,
-              borderRadius: 18
-            },
-            children: [
-              this.uiTitle,
-              this.uiSubtitle,
-              this.uiStats,
-              this.uiStatus,
-              this.uiActionBtn
-            ]
-          });
-
-          this.uiCard.position.set(0, 1.85, -1.8);
-          this.add(this.uiCard);
-        }
-
-        setupInputHandlers() {
-          // Desktop pointer navigation for testing in simulator
-          window.addEventListener('pointermove', (e) => {
-            if (this.activeController) return;
-            const mouse = new THREE.Vector2(
-              (e.clientX / window.innerWidth) * 2 - 1,
-              -(e.clientY / window.innerHeight) * 2 + 1
-            );
-            const raycaster = new THREE.Raycaster();
-            raycaster.setFromCamera(mouse, xb.core.camera);
-            const planeZ = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0.75);
-            const target = new THREE.Vector3();
-            if (raycaster.ray.intersectPlane(planeZ, target)) {
-              this.wandPosition.x = THREE.MathUtils.lerp(this.wandPosition.x, target.x, 0.35);
-              this.wandPosition.y = THREE.MathUtils.lerp(this.wandPosition.y, target.y, 0.35);
-              this.wandGroup.position.copy(this.wandPosition);
-            }
-          });
-
-          window.addEventListener('keydown', (e) => {
-            if (e.code === 'Space') this.handleUiAction();
-          });
-        }
-
-        handleUiAction() {
-          if (this.state === GAME_STATES.MENU || this.state === GAME_STATES.GAME_OVER) {
-            this.startGame();
-          } else if (this.state === GAME_STATES.PLAYING) {
-            this.endGame('Game Paused');
-          }
-        }
-
-        startGame() {
-          this.state = GAME_STATES.PLAYING;
-          this.score = 0;
-          this.combo = 0;
-          this.comboMultiplier = 1;
-          this.lives = this.maxLives;
-          this.difficultyStage = 1;
-          this.currentSpawnInterval = LOOP_CONFIG.BASE_SPAWN_INTERVAL;
-          this.currentLoopSpeed = LOOP_CONFIG.BASE_SPEED;
-          this.timeSinceLastSpawn = this.currentSpawnInterval; // spawn first immediately
-
-          // Clean pool
-          this.loopPool.forEach(l => l.despawn());
-
-          this.uiActionBtn.label = '⏹ STOP GAME';
-          this.uiActionBtn.style.backgroundColor = '#d32f2f';
-          this.uiStatus.text = 'GAME ACTIVE: Dodge the wire, thread the centers!';
-          this.uiStatus.style.color = '#00ff88';
-          this.updateUi();
-        }
-
-        endGame(message) {
-          this.state = GAME_STATES.GAME_OVER;
-          this.loopPool.forEach(l => l.despawn());
-
-          this.uiActionBtn.label = '▶ PLAY AGAIN';
-          this.uiActionBtn.style.backgroundColor = '#00a855';
-          this.uiStatus.text = `${message || 'GAME OVER'} — Final Score: ${this.score}`;
-          this.uiStatus.style.color = '#ff3344';
-          this.updateUi();
-        }
-
-        updateSpawner(dt) {
-          if (this.state !== GAME_STATES.PLAYING) return;
-
-          // Dynamic speed and interval scaling based on score
-          const speedBonus = Math.min(LOOP_CONFIG.MAX_SPEED_BONUS, this.score * LOOP_CONFIG.SPEED_SCORE_SCALE);
-          this.currentLoopSpeed = LOOP_CONFIG.BASE_SPEED + speedBonus;
-
-          const progress = Math.min(1.0, this.score / LOOP_CONFIG.DIFFICULTY_RAMP_SCORE);
-          this.currentSpawnInterval = THREE.MathUtils.lerp(
-            LOOP_CONFIG.BASE_SPAWN_INTERVAL,
-            LOOP_CONFIG.MIN_SPAWN_INTERVAL,
-            progress
-          );
-
-          this.timeSinceLastSpawn += dt;
-          if (this.timeSinceLastSpawn >= this.currentSpawnInterval) {
-            this.timeSinceLastSpawn = 0;
-            this.spawnNextLoop();
-          }
-        }
-
-        spawnNextLoop() {
-          const loop = this.loopPool.find(l => !l.active);
-          if (!loop) return;
-
-          const x = THREE.MathUtils.lerp(
-            LOOP_CONFIG.REACH_BOUNDS_X.min,
-            LOOP_CONFIG.REACH_BOUNDS_X.max,
-            Math.random()
-          );
-          const y = THREE.MathUtils.lerp(
-            LOOP_CONFIG.REACH_BOUNDS_Y.min,
-            LOOP_CONFIG.REACH_BOUNDS_Y.max,
-            Math.random()
-          );
-
-          // Cycle vibrant neon hues
-          const palette = [0x00f0ff, 0xff00a0, 0x00ff88, 0xffbb00, 0xa044ff];
-          const color = palette[Math.floor(Math.random() * palette.length)];
-
-          loop.rebuildGeometry(); // generate unique perturbed 3D bend
-          loop.spawn(x, y, this.currentLoopSpeed, color);
-        }
-
-        checkLoopCollision(loop, dt) {
-          if (!loop.active || loop.resolved) return;
-
-          loop.updateWorldSamples();
-
-          // 3a) WIRE-TOUCH CHECK:
-          // Min distance from wand tip to the M sampled world points on the 3D curve
-          let minDistanceToWire = Infinity;
-          for (let i = 0; i < LOOP_CONFIG.CURVE_SAMPLE_COUNT; i++) {
-            const dist = this.wandTipPosition.distanceTo(loop.worldSampledPoints[i]);
-            if (dist < minDistanceToWire) {
-              minDistanceToWire = dist;
-            }
-          }
-
-          const wireCollisionThreshold = LOOP_CONFIG.TUBE_RADIUS + LOOP_CONFIG.WAND_TIP_RADIUS;
-          if (minDistanceToWire < wireCollisionThreshold) {
-            // FAIL: grazed or hit the wire
-            loop.resolved = true;
-            this.onFail(loop, this.wandTipPosition);
-            return;
-          }
-
-          // 3b) CLEAN-PASS CHECK:
-          // Local plane-of-best-fit normal dot product: (wandTip - loopCenter) · loopNormal
-          this.scratchToWand.subVectors(this.wandTipPosition, loop.worldCenter);
-          const currentDot = this.scratchToWand.dot(loop.worldNormal);
-
-          if (loop.hasPreviousDot) {
-            // Check for plane crossing (sign change between this frame and last frame)
-            const crossedPlane = (this.previousWandPlaneDot * currentDot <= 0) ||
-                                 (Math.abs(this.previousWandPlaneDot) < 0.04 && Math.abs(currentDot) < 0.04);
-
-            if (crossedPlane && !loop.hasPassedPlane) {
-              loop.hasPassedPlane = true;
-
-              // Project wand tip onto the loop's local plane
-              // Distance from loopCenter to wand projected point:
-              this.scratchLoopPlane.setFromNormalAndCoplanarPoint(loop.worldNormal, loop.worldCenter);
-              this.scratchLoopPlane.projectPoint(this.wandTipPosition, this.scratchProjected);
-              const distFromCenter = this.scratchProjected.distanceTo(loop.worldCenter);
-
-              if (distFromCenter <= loop.effectiveInnerRadius) {
-                // SUCCESS: passed cleanly through the center!
-                loop.resolved = true;
-                this.onSuccess(loop, this.wandTipPosition);
-                return;
-              }
-            }
-          }
-
-          loop.previousWandPlaneDot = currentDot;
-          loop.hasPreviousDot = true;
-
-          // 3c) MISS CHECK: loop passed player without successful crossing
-          if (loop.position.z >= (LOOP_CONFIG.PLAYER_DEFAULT_Z + 0.3) && !loop.resolved) {
-            loop.resolved = true;
-            this.onMiss(loop);
-          }
-        }
-
-        triggerHapticFeedback() {
-          // WebXR Gamepad hapticActuators API
-          if (this.activeController?.gamepad?.hapticActuators?.length > 0) {
-            const actuator = this.activeController.gamepad.hapticActuators[0];
-            if (actuator?.pulse) {
-              actuator.pulse(0.85, 140);
-            }
-          }
-        }
-
-        handleSuccess(loop, wandTip) {
-          this.sfx.playSuccess();
-          this.combo++;
-          this.comboMultiplier = Math.min(4, 1 + Math.floor(this.combo / 5));
-          this.score += 10 * this.comboMultiplier;
-
-          // Visual: flash loop green with pulse
-          loop.material.color.setHex(0x00ff88);
-          loop.material.emissive.setHex(0x00ff55);
-          loop.material.emissiveIntensity = 1.0;
-          loop.auraMat.opacity = 0.8;
-
-          // Tip glow flare
-          this.wandTipMat.color.setHex(0x00ff88);
-
-          this.updateUi();
-        }
-
-        handleFail(loop, wandTip) {
-          this.sfx.playFail();
-          this.triggerHapticFeedback();
-          this.combo = 0;
-          this.comboMultiplier = 1;
-          this.lives = Math.max(0, this.lives - 1);
-
-          // Visual: Red flash & shatter fragments
-          this.wandTipMat.color.setHex(0xff1744);
-          loop.explodeFragments(wandTip);
-
-          this.updateUi();
-
-          if (this.lives <= 0) {
-            this.endGame('OUT OF LIVES!');
-          }
-        }
-
-        handleMiss(loop) {
-          this.sfx.playMiss();
-          this.combo = 0;
-          this.comboMultiplier = 1;
-          this.updateUi();
-        }
-
-        updateUi() {
-          if (this.uiStats) {
-            this.uiStats.text = `Score: ${this.score}   Combo: ${this.combo} (x${this.comboMultiplier})   Lives: ${this.lives}/${this.maxLives}`;
-          }
-        }
-
-        update(delta) {
-          super.update?.(delta);
-          const dt = Math.min(delta || 0.016, 0.05);
-
-          // 1. Sync Controller / Wand Tip Transform
-          if (xb.core.input?.controllers && xb.core.input.controllers.length > 0) {
-            const c0 = xb.core.input.controllers[0];
-            if (c0.visible && c0.position.lengthSq() > 0.01) {
-              this.activeController = c0;
-              this.wandGroup.position.copy(c0.position);
-              this.wandGroup.quaternion.copy(c0.quaternion);
-            }
-          }
-
-          // Calculate world position of the wand's forward collision tip
-          this.wandTipMesh.getWorldPosition(this.wandTipPosition);
-
-          // Ease wand tip color back to cyan
-          this.wandTipMat.color.lerp(new THREE.Color(0x00f0ff), dt * 4.0);
-
-          // 2. Update Spawner
-          this.updateSpawner(dt);
-
-          // 3. Move Active Loops & Check Collisions
-          for (const loop of this.loopPool) {
-            if (!loop.active) continue;
-
-            // Move along +Z towards player
-            loop.position.z += loop.speed * dt;
-
-            // Update aura fade
-            if (loop.auraMat.opacity > 0.01) {
-              loop.auraMat.opacity -= dt * 2.5;
-            }
-
-            // Update explosion particles if shattered
-            if (!loop.mesh.visible) {
-              const activeParticles = loop.updateFragments(dt);
-              if (!activeParticles && loop.position.z > LOOP_CONFIG.DESPAWN_Z) {
-                loop.despawn();
-              }
-            } else {
-              // Run collision evaluation
-              this.checkLoopCollision(loop, dt);
-
-              // Despawn if past cleanup threshold
-              if (loop.position.z > LOOP_CONFIG.DESPAWN_Z) {
-                loop.despawn();
-              }
-            }
-          }
-        }
-
-        dispose() {
-          this.loopPool.forEach(l => {
-            l.mesh?.geometry?.dispose();
-            l.material?.dispose();
-          });
-        }
-      }
-
-      document.addEventListener('DOMContentLoaded', () => {
-        const options = new xb.Options();
-        options.setAppTitle('WIRELOOP');
-        options.setAppDescription(
-          'A Beat Saber–style steady-hand game. Thread your wand cleanly through approaching warped wire loops without grazing the wire!'
-        );
-
-        // Input & Simulation
-        options.enableReticles();
-        options.interaction.raycastMode = 'select';
-        options.simulator.defaultMode = xb.SimulatorMode.CONTROLLER;
-        options.xrButton.showEnterSimulatorButton = true;
-
-        xb.add(new WireLoopGame());
-        xb.init(options);
+import RAPIER from '@dimforge/rapier3d-simd-compat';
+import * as THREE from 'three';
+import * as xb from 'xrblocks';
+
+// Game Configuration Constants
+const NUM_BALLS = 8;
+const BALLS_PER_ROUND = 10;
+const BALL_RADIUS = 0.052;
+const MAX_THROW_SPEED = 12.0;       // Max velocity cap (m/s) to prevent tracking spikes
+const MIN_HIT_SPEED = 1.8;          // Minimum velocity (m/s) required for a qualifying hit
+const CRAB_TRACK_Z = -2.85;         // Target track distance
+const CRAB_TRACK_Y = 1.30;          // Height of crab track
+const CRAB_RANGE_X = 1.35;          // Scuttle horizontal reach (-X to +X)
+const CRAB_BASE_SPEED = 1.3;        // Movement speed
+const PIT_POS = new THREE.Vector3(0.24, 0.72, -0.62); // Arm's reach ball pit location
+const PIT_WIDTH = 0.60;
+const PIT_DEPTH = 0.44;
+const PIT_WALL_HEIGHT = 0.16;
+
+// Reusable scratch vectors to avoid per-frame allocations
+const _v1 = new THREE.Vector3();
+const _v2 = new THREE.Vector3();
+const _v3 = new THREE.Vector3();
+const _rayOrigin = new THREE.Vector3();
+const _rayDir = new THREE.Vector3();
+
+class CarnivalAudioManager {
+  constructor() {
+    this.ctx = null;
+  }
+
+  ensureContext() {
+    if (!this.ctx) {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) this.ctx = new AudioCtx();
+    }
+    if (this.ctx && this.ctx.state === 'suspended') {
+      this.ctx.resume();
+    }
+  }
+
+  playGrab() {
+    try {
+      this.ensureContext();
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(280, this.ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(560, this.ctx.currentTime + 0.09);
+      gain.gain.setValueAtTime(0.2, this.ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.09);
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start();
+      osc.stop(this.ctx.currentTime + 0.1);
+    } catch (_) {}
+  }
+
+  playWhoosh(speed = 5.0) {
+    try {
+      this.ensureContext();
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'triangle';
+      const startFreq = 260 + Math.min(speed * 35, 300);
+      osc.frequency.setValueAtTime(startFreq, this.ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(110, this.ctx.currentTime + 0.18);
+      gain.gain.setValueAtTime(0.28, this.ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.18);
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start();
+      osc.stop(this.ctx.currentTime + 0.2);
+    } catch (_) {}
+  }
+
+  playCrabHit() {
+    try {
+      this.ensureContext();
+      if (!this.ctx) return;
+      // Dual-tone celebratory bell pop
+      [784, 1046.5].forEach((freq, i) => {
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq, this.ctx.currentTime + i * 0.04);
+        gain.gain.setValueAtTime(0.35, this.ctx.currentTime + i * 0.04);
+        gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + i * 0.04 + 0.28);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(this.ctx.currentTime + i * 0.04);
+        osc.stop(this.ctx.currentTime + i * 0.04 + 0.3);
       });
+    } catch (_) {}
+  }
+
+  playMissThud() {
+    try {
+      this.ensureContext();
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(130, this.ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(45, this.ctx.currentTime + 0.14);
+      gain.gain.setValueAtTime(0.22, this.ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.14);
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start();
+      osc.stop(this.ctx.currentTime + 0.15);
+    } catch (_) {}
+  }
+}
+
+class SparkParticleGroup extends THREE.Group {
+  constructor(count = 28) {
+    super();
+    this.particles = [];
+    const geom = new THREE.SphereGeometry(0.016, 6, 6);
+    const colors = [0xffd700, 0xff5722, 0xffeb3b, 0xff1744];
+
+    for (let i = 0; i < count; i++) {
+      const mat = new THREE.MeshBasicMaterial({
+        color: colors[i % colors.length],
+        transparent: true,
+        opacity: 0,
+      });
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.visible = false;
+      this.add(mesh);
+      this.particles.push({
+        mesh,
+        vel: new THREE.Vector3(),
+        life: 0,
+        maxLife: 0.5,
+      });
+    }
+  }
+
+  burst(origin) {
+    for (const p of this.particles) {
+      p.mesh.position.copy(origin);
+      p.mesh.visible = true;
+      p.mesh.material.opacity = 1.0;
+      p.vel.set(
+        (Math.random() - 0.5) * 4.2,
+        Math.random() * 2.8 + 0.8,
+        (Math.random() - 0.5) * 3.5
+      );
+      p.life = 0;
+      p.maxLife = 0.35 + Math.random() * 0.3;
+    }
+  }
+
+  update(dt) {
+    for (const p of this.particles) {
+      if (!p.mesh.visible) continue;
+      p.life += dt;
+      if (p.life >= p.maxLife) {
+        p.mesh.visible = false;
+        continue;
+      }
+      p.vel.y -= 7.0 * dt;
+      p.mesh.position.addScaledVector(p.vel, dt);
+      const ratio = 1 - p.life / p.maxLife;
+      p.mesh.scale.setScalar(Math.max(0.01, ratio));
+      p.mesh.material.opacity = ratio;
+    }
+  }
+}
+
+class TossBallScript extends xb.Script {
+  constructor(ballIndex, manager) {
+    super();
+    this.ballIndex = ballIndex;
+    this.manager = manager;
+
+    // Visual Mesh & Materials
+    const geom = new THREE.SphereGeometry(BALL_RADIUS, 24, 20);
+    this.normalMaterial = new THREE.MeshStandardMaterial({
+      color: 0xef4444,
+      roughness: 0.35,
+      metalness: 0.1,
+    });
+    this.grabbedMaterial = new THREE.MeshStandardMaterial({
+      color: 0xffaa00,
+      emissive: 0xff4400,
+      emissiveIntensity: 0.45,
+      roughness: 0.25,
+    });
+    this.mesh = new THREE.Mesh(geom, this.normalMaterial);
+    this.mesh.castShadow = true;
+    this.add(this.mesh);
+
+    // Interaction flags for XR Blocks
+    this.xb = {
+      pointerEvents: 'auto',
+      reticleMode: 'auto',
+      manipulation: true,
+    };
+
+    // Physics reference
+    this.rigidBody = null;
+    this.collider = null;
+
+    // Grab State & 5-Frame Circular Ring Buffer
+    this.isGrabbed = false;
+    this.grabSource = null; // Controller or camera/mouse pointer
+    this.ringBuffer = [];   // Stores { pos: THREE.Vector3, time: number }
+    this.lastThrowTime = 0;
+  }
+
+  initPhysics({ RAPIER, blendedWorld }) {
+    this.RAPIER = RAPIER;
+    this.blendedWorld = blendedWorld;
+
+    // Spawn ball inside the ball pit
+    const spawnPos = this.getPitSpawnPosition();
+    this.mesh.position.copy(spawnPos);
+
+    const rbDesc = RAPIER.RigidBodyDesc.dynamic()
+      .setTranslation(spawnPos.x, spawnPos.y, spawnPos.z)
+      .setLinearDamping(0.35)
+      .setAngularDamping(0.4)
+      .setCcdEnabled(true);
+
+    this.rigidBody = blendedWorld.createRigidBody(rbDesc);
+
+    const colDesc = RAPIER.ColliderDesc.ball(BALL_RADIUS)
+      .setRestitution(0.45)
+      .setFriction(0.6)
+      .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
+
+    this.collider = blendedWorld.createCollider(colDesc, this.rigidBody);
+  }
+
+  getPitSpawnPosition() {
+    const col = this.ballIndex % 4;
+    const row = Math.floor(this.ballIndex / 4);
+    const offsetX = (col - 1.5) * (BALL_RADIUS * 2.2);
+    const offsetZ = (row - 0.5) * (BALL_RADIUS * 2.2);
+    return new THREE.Vector3(
+      PIT_POS.x + offsetX,
+      PIT_POS.y + 0.08,
+      PIT_POS.z + offsetZ
+    );
+  }
+
+  respawnInPit() {
+    if (!this.rigidBody) return;
+    const pos = this.getPitSpawnPosition();
+    this.rigidBody.setBodyType(this.RAPIER.RigidBodyType.Dynamic, true);
+    this.rigidBody.setTranslation({ x: pos.x, y: pos.y, z: pos.z }, true);
+    this.rigidBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    this.rigidBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    this.mesh.position.copy(pos);
+    this.isGrabbed = false;
+    this.mesh.material = this.normalMaterial;
+  }
+
+  // --- Grab Lifecycle Integration ---
+  onObjectGrabStart(event) {
+    if (this.manager.gameState !== 'PLAYING') return true;
+    if (this.isGrabbed) return true;
+
+    this.isGrabbed = true;
+    this.grabSource = event.source?.controller || event.source || null;
+
+    // Switch Rapier body to kinematicPositionBased so physics obeys the hand
+    this.rigidBody.setBodyType(this.RAPIER.RigidBodyType.KinematicPositionBased, true);
+    this.mesh.material = this.grabbedMaterial;
+
+    // Initialize 5-frame ring buffer
+    const now = performance.now();
+    this.ringBuffer = [
+      { pos: this.mesh.position.clone(), time: now }
+    ];
+
+    this.manager.audio.playGrab();
+    event.stopPropagation?.();
+    return true;
+  }
+
+  onObjectGrabbing(event) {
+    if (!this.isGrabbed || !this.rigidBody) return true;
+
+    const controller = event.source?.controller || this.grabSource;
+    if (controller && controller.position) {
+      _v1.copy(controller.position);
+    } else {
+      // Fallback: mouse/camera raycast plane
+      const cam = xb.core.camera;
+      if (cam) {
+        _v1.copy(cam.position).addScaledVector(cam.getWorldDirection(_v2), 0.55);
+      }
+    }
+
+    // Kinematic synchronization with Rapier
+    this.rigidBody.setNextKinematicTranslation({ x: _v1.x, y: _v1.y, z: _v1.z });
+    this.mesh.position.copy(_v1);
+
+    // Record to Ring Buffer (keep max 5 samples within ~0.15s window)
+    const now = performance.now();
+    this.ringBuffer.push({ pos: _v1.clone(), time: now });
+    while (this.ringBuffer.length > 5 || (this.ringBuffer.length > 2 && now - this.ringBuffer[0].time > 150)) {
+      this.ringBuffer.shift();
+    }
+
+    event.stopPropagation?.();
+    return true;
+  }
+
+  onObjectGrabEnd(event) {
+    if (!this.isGrabbed || !this.rigidBody) return true;
+    this.isGrabbed = false;
+    this.mesh.material = this.normalMaterial;
+
+    // 3. THROW / RELEASE PHYSICS
+    _v1.set(0, 1.8, -4.5); // Fallback velocity
+
+    if (this.ringBuffer.length >= 2) {
+      const oldest = this.ringBuffer[0];
+      const newest = this.ringBuffer[this.ringBuffer.length - 1];
+      const dt = (newest.time - oldest.time) / 1000.0;
+
+      if (dt > 0.008) {
+        _v1.copy(newest.pos).sub(oldest.pos).divideScalar(dt);
+        // Boost forward impulse slightly for throwing comfort
+        _v1.multiplyScalar(1.2);
+
+        // Clamp to MAX_THROW_SPEED to avoid tracking spikes
+        const currentSpeed = _v1.length();
+        if (currentSpeed > MAX_THROW_SPEED) {
+          _v1.multiplyScalar(MAX_THROW_SPEED / currentSpeed);
+        }
+
+        // Ensure realistic forward toss trajectory if pitched forward
+        if (_v1.z >= -0.5) {
+          _v1.z = -Math.max(2.8, Math.hypot(_v1.x, _v1.y) * 0.9);
+        }
+      }
+    }
+
+    // Switch body back to dynamic and apply computed launch velocity directly
+    this.rigidBody.setBodyType(this.RAPIER.RigidBodyType.Dynamic, true);
+    this.rigidBody.setLinvel({ x: _v1.x, y: _v1.y, z: _v1.z }, true);
+
+    this.lastThrowTime = performance.now();
+    this.manager.onBallThrown(this, _v1);
+    this.ringBuffer = [];
+
+    event.stopPropagation?.();
+    return true;
+  }
+
+  // Support direct select/pinch for desktop preview simulator
+  onObjectSelectStart(event) {
+    return this.onObjectGrabStart(event);
+  }
+
+  onObjectSelectEnd(event) {
+    return this.onObjectGrabEnd(event);
+  }
+
+  physicsStep() {
+    if (!this.rigidBody) return;
+
+    if (!this.isGrabbed) {
+      const t = this.rigidBody.translation();
+      const r = this.rigidBody.rotation();
+      this.mesh.position.set(t.x, t.y, t.z);
+      this.mesh.quaternion.set(r.x, r.y, r.z, r.w);
+
+      // Check for balls that fell out of bounds or idle too long away from pit
+      if (t.y < -0.6 || (performance.now() - this.lastThrowTime > 8500 && this.lastThrowTime > 0)) {
+        this.respawnInPit();
+      }
+    }
+  }
+
+  dispose() {
+    this.mesh.geometry.dispose();
+    this.normalMaterial.dispose();
+    this.grabbedMaterial.dispose();
+    if (this.rigidBody && this.blendedWorld) {
+      this.blendedWorld.removeRigidBody(this.rigidBody);
+    }
+  }
+}
+
+class CrabTarget extends THREE.Group {
+  constructor() {
+    super();
+    this.buildCrabMesh();
+    this.resetState();
+  }
+
+  buildCrabMesh() {
+    this.crabContainer = new THREE.Group();
+    this.add(this.crabContainer);
+
+    // Carapace shell
+    const bodyGeom = new THREE.CylinderGeometry(0.18, 0.22, 0.09, 16);
+    const bodyMat = new THREE.MeshStandardMaterial({
+      color: 0xe11d48,
+      roughness: 0.35,
+      metalness: 0.15,
+    });
+    this.bodyMesh = new THREE.Mesh(bodyGeom, bodyMat);
+    this.bodyMesh.castShadow = true;
+    this.crabContainer.add(this.bodyMesh);
+
+    // Eyes
+    const eyeGeom = new THREE.SphereGeometry(0.032, 12, 12);
+    const eyeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 });
+    const pupilMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+
+    [-0.08, 0.08].forEach((x) => {
+      const eye = new THREE.Mesh(eyeGeom, eyeMat);
+      eye.position.set(x, 0.065, 0.16);
+      const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.015, 8, 8), pupilMat);
+      pupil.position.set(0, 0, 0.024);
+      eye.add(pupil);
+      this.crabContainer.add(eye);
+    });
+
+    // Pincers / Claws
+    const clawGeom = new THREE.BoxGeometry(0.12, 0.06, 0.15);
+    const clawMat = new THREE.MeshStandardMaterial({ color: 0xbe123c, roughness: 0.4 });
+    this.leftClaw = new THREE.Mesh(clawGeom, clawMat);
+    this.leftClaw.position.set(-0.25, 0.02, 0.14);
+    this.leftClaw.rotation.y = 0.35;
+    this.rightClaw = new THREE.Mesh(clawGeom, clawMat);
+    this.rightClaw.position.set(0.25, 0.02, 0.14);
+    this.rightClaw.rotation.y = -0.35;
+    this.crabContainer.add(this.leftClaw, this.rightClaw);
+
+    // Walking legs
+    this.legs = [];
+    const legGeom = new THREE.CylinderGeometry(0.012, 0.012, 0.12, 8);
+    const legMat = new THREE.MeshStandardMaterial({ color: 0x9f1239 });
+
+    for (let side = -1; side <= 1; side += 2) {
+      for (let i = 0; i < 3; i++) {
+        const leg = new THREE.Mesh(legGeom, legMat);
+        leg.position.set(side * (0.16 + i * 0.03), -0.04, -0.06 + i * 0.07);
+        leg.rotation.z = side * (0.7 + i * 0.1);
+        this.crabContainer.add(leg);
+        this.legs.push({ mesh: leg, baseRotZ: leg.rotation.z, phase: i * 0.8 + (side > 0 ? Math.PI : 0) });
+      }
+    }
+  }
+
+  resetState() {
+    this.isHit = false;
+    this.isRespawning = false;
+    this.crabContainer.rotation.set(0, 0, 0);
+    this.crabContainer.scale.set(1, 1, 1);
+    this.crabContainer.visible = true;
+    this.trackPositionX = (Math.random() - 0.5) * CRAB_RANGE_X;
+    this.direction = Math.random() > 0.5 ? 1 : -1;
+    this.speed = CRAB_BASE_SPEED;
+    this.updatePosition();
+  }
+
+  updatePosition() {
+    this.position.set(this.trackPositionX, CRAB_TRACK_Y, CRAB_TRACK_Z);
+  }
+
+  update(dt, timeSec) {
+    if (this.isHit) {
+      // Knockdown tip-over & shrink animation
+      if (this.crabContainer.rotation.x > -Math.PI / 2) {
+        this.crabContainer.rotation.x -= 7.5 * dt;
+        this.crabContainer.position.y += 0.4 * dt;
+        this.crabContainer.scale.multiplyScalar(Math.max(0.01, 1 - 2.8 * dt));
+      }
+      return;
+    }
+
+    // Scuttle movement side-to-side along track
+    this.trackPositionX += this.direction * this.speed * dt;
+    if (this.trackPositionX > CRAB_RANGE_X) {
+      this.trackPositionX = CRAB_RANGE_X;
+      this.direction = -1;
+    } else if (this.trackPositionX < -CRAB_RANGE_X) {
+      this.trackPositionX = -CRAB_RANGE_X;
+      this.direction = 1;
+    }
+    this.updatePosition();
+
+    // Leg scuttle animation
+    for (const leg of this.legs) {
+      leg.mesh.rotation.z = leg.baseRotZ + Math.sin(timeSec * 16 + leg.phase) * 0.22;
+    }
+
+    // Claw wave
+    this.leftClaw.rotation.y = 0.35 + Math.sin(timeSec * 6) * 0.15;
+    this.rightClaw.rotation.y = -0.35 - Math.sin(timeSec * 6) * 0.15;
+  }
+
+  triggerKnockdown() {
+    this.isHit = true;
+    this.crabContainer.scale.set(1.25, 0.75, 1.25); // Squash pulse
+  }
+}
+
+class CarnivalBallTossGame extends xb.Script {
+  constructor() {
+    super();
+    this.gameState = 'MENU'; // 'MENU' | 'PLAYING' | 'ROUND_OVER'
+    this.score = 0;
+    this.ballsRemaining = BALLS_PER_ROUND;
+    this.successfulHits = 0;
+    this.roundLevel = 1;
+
+    this.audio = new CarnivalAudioManager();
+    this.balls = [];
+    this.rigidBodyToBall = new Map();
+  }
+
+  initPhysics(physics) {
+    this.RAPIER = physics.RAPIER;
+    this.blendedWorld = physics.blendedWorld;
+
+    // Floor physics plane
+    const floorDesc = this.RAPIER.RigidBodyDesc.fixed().setTranslation(0, 0, 0);
+    const floorBody = this.blendedWorld.createRigidBody(floorDesc);
+    const floorCol = this.RAPIER.ColliderDesc.cuboid(10, 0.05, 10);
+    this.blendedWorld.createCollider(floorCol, floorBody);
+
+    // Ball pit table and surrounding walls
+    this.setupBallPitPhysics();
+
+    // Initialize all ball pool physics
+    for (const ball of this.balls) {
+      ball.initPhysics(physics);
+      this.rigidBodyToBall.set(ball.rigidBody.handle, ball);
+    }
+  }
+
+  setupBallPitPhysics() {
+    // Tray base
+    const pitBaseDesc = this.RAPIER.RigidBodyDesc.fixed().setTranslation(
+      PIT_POS.x,
+      PIT_POS.y - 0.02,
+      PIT_POS.z
+    );
+    const pitBaseBody = this.blendedWorld.createRigidBody(pitBaseDesc);
+    const pitBaseCol = this.RAPIER.ColliderDesc.cuboid(
+      PIT_WIDTH / 2,
+      0.02,
+      PIT_DEPTH / 2
+    );
+    this.blendedWorld.createCollider(pitBaseCol, pitBaseBody);
+
+    // Perimeter retaining walls
+    const hw = PIT_WIDTH / 2;
+    const hd = PIT_DEPTH / 2;
+    const wallThick = 0.025;
+    const wallH = PIT_WALL_HEIGHT / 2;
+
+    const walls = [
+      { x: PIT_POS.x, z: PIT_POS.z - hd, sx: hw, sz: wallThick },
+      { x: PIT_POS.x, z: PIT_POS.z + hd, sx: hw, sz: wallThick },
+      { x: PIT_POS.x - hw, z: PIT_POS.z, sx: wallThick, sz: hd },
+      { x: PIT_POS.x + hw, z: PIT_POS.z, sx: wallThick, sz: hd },
+    ];
+
+    walls.forEach((w) => {
+      const desc = this.RAPIER.RigidBodyDesc.fixed().setTranslation(
+        w.x,
+        PIT_POS.y + wallH,
+        w.z
+      );
+      const b = this.blendedWorld.createRigidBody(desc);
+      const c = this.RAPIER.ColliderDesc.cuboid(w.sx, wallH, w.sz);
+      this.blendedWorld.createCollider(c, b);
+    });
+  }
+
+  init() {
+    this.setupEnvironment();
+    this.setupBallPitVisuals();
+    this.setupCrabAndTrack();
+    this.setupBalls();
+    this.setupSpatialHUD();
+
+    this.sparks = new SparkParticleGroup(32);
+    this.add(this.sparks);
+
+    // Desktop Raycasting helper
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'KeyR') this.startNewRound();
+      if (e.code === 'Space') this.simulateToss();
+    });
+  }
+
+  setupEnvironment() {
+    const hemi = new THREE.HemisphereLight(0xfff7e6, 0x1e1b4b, 2.5);
+    this.add(hemi);
+
+    const sun = new THREE.DirectionalLight(0xffedd5, 2.8);
+    sun.position.set(2.5, 4.8, 1.2);
+    sun.castShadow = true;
+    this.add(sun);
+
+    // Warm booth spotlights
+    const trackLight = new THREE.PointLight(0xf59e0b, 2.2, 7.0);
+    trackLight.position.set(0, CRAB_TRACK_Y + 1.2, CRAB_TRACK_Z + 0.4);
+    this.add(trackLight);
+
+    // Carnival back-wall
+    const wallGeom = new THREE.BoxGeometry(4.8, 3.2, 0.1);
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0x1e1b4b, roughness: 0.8 });
+    const wallMesh = new THREE.Mesh(wallGeom, wallMat);
+    wallMesh.position.set(0, 1.6, CRAB_TRACK_Z - 0.4);
+    this.add(wallMesh);
+  }
+
+  setupBallPitVisuals() {
+    this.pitGroup = new THREE.Group();
+    this.pitGroup.position.copy(PIT_POS);
+
+    // Wooden stand table
+    const standGeom = new THREE.CylinderGeometry(0.24, 0.28, PIT_POS.y, 24);
+    const standMat = new THREE.MeshStandardMaterial({ color: 0x451a03, roughness: 0.7 });
+    const standMesh = new THREE.Mesh(standGeom, standMat);
+    standMesh.position.set(0, -PIT_POS.y / 2, 0);
+    this.pitGroup.add(standMesh);
+
+    // Ball tray
+    const trayGeom = new THREE.BoxGeometry(PIT_WIDTH, 0.04, PIT_DEPTH);
+    const trayMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.5 });
+    const trayMesh = new THREE.Mesh(trayGeom, trayMat);
+    this.pitGroup.add(trayMesh);
+
+    // Striped rim border
+    const rimGeom = new THREE.BoxGeometry(PIT_WIDTH + 0.04, PIT_WALL_HEIGHT, PIT_DEPTH + 0.04);
+    const rimMat = new THREE.MeshStandardMaterial({ color: 0xb45309, roughness: 0.6 });
+    const rimMesh = new THREE.Mesh(rimGeom, rimMat);
+    rimMesh.position.y = PIT_WALL_HEIGHT / 2;
+    this.pitGroup.add(rimMesh);
+
+    this.add(this.pitGroup);
+  }
+
+  setupCrabAndTrack() {
+    // Physical wooden track beam
+    const beamGeom = new THREE.BoxGeometry(CRAB_RANGE_X * 2 + 0.5, 0.08, 0.35);
+    const beamMat = new THREE.MeshStandardMaterial({ color: 0x581c87, roughness: 0.6 });
+    const beamMesh = new THREE.Mesh(beamGeom, beamMat);
+    beamMesh.position.set(0, CRAB_TRACK_Y - 0.05, CRAB_TRACK_Z);
+    beamMesh.receiveShadow = true;
+    this.add(beamMesh);
+
+    // Striped carnival backdrop banner
+    const bannerGeom = new THREE.BoxGeometry(CRAB_RANGE_X * 2 + 0.4, 0.5, 0.02);
+    const bannerMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.5 });
+    const bannerMesh = new THREE.Mesh(bannerGeom, bannerMat);
+    bannerMesh.position.set(0, CRAB_TRACK_Y + 0.28, CRAB_TRACK_Z - 0.12);
+    this.add(bannerMesh);
+
+    // Animated Crab Target
+    this.crab = new CrabTarget();
+    this.add(this.crab);
+  }
+
+  setupBalls() {
+    for (let i = 0; i < NUM_BALLS; i++) {
+      const ballScript = new TossBallScript(i, this);
+      this.balls.push(ballScript);
+      this.add(ballScript);
+    }
+  }
+
+  setupSpatialHUD() {
+    this.scoreText = new xb.UIText({
+      text: '0000',
+      style: { fontSize: 36, fontWeight: 'bold', color: '#fbbf24', textAlign: 'center' },
+    });
+
+    this.ballsText = new xb.UIText({
+      text: 'BALLS: 10',
+      style: { fontSize: 18, fontWeight: 'bold', color: '#38bdf8', textAlign: 'center' },
+    });
+
+    this.statusText = new xb.UIText({
+      text: 'Reach into the pit, grab a ball, and fling it at the crab!',
+      style: { fontSize: 13, color: '#cbd5e1', textAlign: 'center', lineHeight: 1.35 },
+    });
+
+    this.playAgainBtn = new xb.UIButton({
+      label: 'Play Round',
+      icon: 'sports_baseball',
+      style: { width: '100%', padding: 10, backgroundColor: '#2563eb' },
+      onClick: () => this.startNewRound(),
+    });
+
+    this.hudCard = new xb.UICard({
+      size: { width: 0.44, height: 'auto' },
+      manipulation: false,
+      style: {
+        flexDirection: 'column',
+        gap: 10,
+        padding: 16,
+        backgroundColor: 'rgba(15, 23, 42, 0.94)',
+        borderRadius: 18,
+        borderWidth: 2,
+        borderColor: 'rgba(251, 191, 36, 0.4)',
+      },
+      children: [
+        new xb.UIText({
+          text: '🦀 CARNIVAL TOSS',
+          style: { fontSize: 22, fontWeight: 'bold', color: '#f43f5e', textAlign: 'center' },
+        }),
+        new xb.UIPanel({
+          style: {
+            width: '100%',
+            flexDirection: 'row',
+            justifyContent: 'space-around',
+            backgroundColor: 'rgba(0, 0, 0, 0.35)',
+            borderRadius: 12,
+            padding: 8,
+          },
+          children: [
+            new xb.UIPanel({
+              style: { flexDirection: 'column', alignItems: 'center' },
+              children: [
+                new xb.UIText({ text: 'SCORE', style: { fontSize: 11, color: '#94a3b8' } }),
+                this.scoreText,
+              ],
+            }),
+            new xb.UIPanel({
+              style: { flexDirection: 'column', alignItems: 'center' },
+              children: [
+                new xb.UIText({ text: 'REMAINING', style: { fontSize: 11, color: '#94a3b8' } }),
+                this.ballsText,
+              ],
+            }),
+          ],
+        }),
+        this.statusText,
+        this.playAgainBtn,
+      ],
+    });
+
+    // Positioned beside the player at arm's reach
+    this.hudCard.position.set(-0.36, 1.08, -0.62);
+    this.hudCard.rotation.set(-0.16, 0.42, 0);
+    this.add(this.hudCard);
+  }
+
+  startNewRound() {
+    this.gameState = 'PLAYING';
+    this.score = 0;
+    this.ballsRemaining = BALLS_PER_ROUND;
+    this.successfulHits = 0;
+    this.roundLevel = 1;
+
+    this.crab.resetState();
+    for (const b of this.balls) b.respawnInPit();
+
+    this.updateHUD();
+    this.audio.playGrab();
+  }
+
+  onBallThrown(ball, velocity) {
+    if (this.gameState !== 'PLAYING') return;
+
+    this.ballsRemaining--;
+    this.audio.playWhoosh(velocity.length());
+
+    if (this.ballsRemaining <= 0) {
+      setTimeout(() => {
+        if (this.gameState === 'PLAYING') {
+          this.gameState = 'ROUND_OVER';
+          this.updateHUD();
+        }
+      }, 2500);
+    }
+
+    this.updateHUD();
+  }
+
+  simulateToss() {
+    if (this.gameState !== 'PLAYING' || this.ballsRemaining <= 0) return;
+    const availableBall = this.balls.find((b) => !b.isGrabbed);
+    if (!availableBall) return;
+
+    // Direct pitch towards crab with simulated throw
+    _v1.set(
+      this.crab.position.x + (Math.random() - 0.5) * 0.18,
+      this.crab.position.y + 0.05,
+      this.crab.position.z
+    );
+    const start = availableBall.mesh.position.clone();
+    const delta = _v1.sub(start);
+    const time = 0.45;
+    const vel = delta.divideScalar(time);
+    vel.y += 0.5 * 9.81 * time;
+
+    availableBall.rigidBody.setTranslation({ x: start.x, y: start.y + 0.1, z: start.z }, true);
+    availableBall.rigidBody.setLinvel({ x: vel.x, y: vel.y, z: vel.z }, true);
+    availableBall.lastThrowTime = performance.now();
+    this.onBallThrown(availableBall, vel);
+  }
+
+  updateHUD() {
+    this.scoreText.text = String(this.score).padStart(4, '0');
+    this.ballsText.text = `BALLS: ${Math.max(0, this.ballsRemaining)}`;
+
+    if (this.gameState === 'MENU') {
+      this.statusText.text = 'Tap Play Round to start the carnival toss!';
+      this.playAgainBtn.label = 'Start Game';
+    } else if (this.gameState === 'ROUND_OVER') {
+      this.statusText.text = `Round Over! Score: ${this.score} (${this.successfulHits} hits). Play again?`;
+      this.playAgainBtn.label = 'Play Again';
+    } else {
+      this.statusText.text = `Hits: ${this.successfulHits} | Speed: Lv.${this.roundLevel}`;
+      this.playAgainBtn.label = 'Restart Round';
+    }
+  }
+
+  physicsStep() {
+    const dt = xb.getDeltaTime() || 0.016;
+    const timeSec = performance.now() * 0.001;
+
+    // Step each individual ball's physics
+    for (const b of this.balls) {
+      b.physicsStep();
+    }
+
+    // Crab Target Movement
+    this.crab.update(dt, timeSec);
+
+    // Continuous Hit Detection against Crab Mesh
+    if (this.gameState === 'PLAYING' && !this.crab.isHit) {
+      const crabPos = this.crab.position;
+      const crabRadius = 0.28;
+
+      for (const ball of this.balls) {
+        if (ball.isGrabbed || !ball.rigidBody) continue;
+
+        const ballPos = ball.mesh.position;
+        const dist = ballPos.distanceTo(crabPos);
+
+        if (dist < crabRadius + BALL_RADIUS) {
+          const linvel = ball.rigidBody.linvel();
+          const speed = Math.hypot(linvel.x, linvel.y, linvel.z);
+
+          // 4. QUALIFYING HIT SPEED THRESHOLD
+          if (speed >= MIN_HIT_SPEED) {
+            this.handleCrabHit(ballPos, speed);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  handleCrabHit(contactPoint, speed) {
+    this.successfulHits++;
+    const points = 100 * this.roundLevel;
+    this.score += points;
+
+    this.crab.triggerKnockdown();
+    this.sparks.burst(contactPoint);
+    this.audio.playCrabHit();
+
+    // Ramp up speed on next respawn
+    this.roundLevel++;
+    this.updateHUD();
+
+    // Respawn crab after brief knockdown delay
+    setTimeout(() => {
+      if (this.gameState === 'PLAYING') {
+        this.crab.resetState();
+        this.crab.speed = CRAB_BASE_SPEED + this.roundLevel * 0.25;
+      }
+    }, 1200);
+  }
+
+  update() {
+    const dt = xb.getDeltaTime() || 0.016;
+    this.sparks.update(dt);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const options = new xb.Options();
+  options.setAppTitle('Carnival Ball Toss');
+  options.setAppDescription(
+    'Grab physical balls from the pit and throw them at the scuttling crab target!'
+  );
+
+  // Enable Rapier3D Physics Engine
+  options.physics.RAPIER = RAPIER;
+
+  // Hand and controller configuration
+  options.enableHands();
+  options.enableReticles();
+  options.hands.visualization = true;
+  options.hands.visualizeJoints = true;
+  options.hands.visualizeMeshes = true;
+  options.simulator.defaultMode = xb.SimulatorMode.CONTROLLER;
+  options.xrButton.showEnterSimulatorButton = true;
+
+  xb.add(new CarnivalBallTossGame());
+  xb.init(options);
+});
     </script>
   </body>
 </html>
