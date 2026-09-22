@@ -12,6 +12,8 @@
       rel="stylesheet"
       href="https://xrblocks.github.io/css/xr.css"
     />
+    <!-- Cannon.js for authentic, robust 3D physics simulation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script>
       window.litDisableBundleWarning = true;
     </script>
@@ -33,20 +35,116 @@
         }
       }
     </script>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      #crosshair {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 14px;
+        height: 14px;
+        border: 2px solid rgba(255, 255, 255, 0.7);
+        border-radius: 50%;
+        pointer-events: none;
+        z-index: 100;
+        box-shadow: 0 0 6px rgba(0, 0, 0, 0.5);
+      }
+    </style>
   </head>
 
   <body>
+    <div id="crosshair"></div>
     <script type="module">
 import * as THREE from 'three';
 import * as xb from 'xrblocks';
 
 const CAN_RADIUS = 0.052;
 const CAN_HEIGHT = 0.15;
-const BALL_RADIUS = 0.048;
-const TABLE_Y = 0.88;
-const TABLE_Z = -1.95;
-const GRAVITY = -9.2;
+const BALL_RADIUS = 0.046;
+const TABLE_Y = 0.92;
+const TABLE_Z = -1.65;
+const STAND_POS = new THREE.Vector3(0, 0.95, -0.68);
 const INITIAL_BALLS = 5;
+
+class CarnivalAudio {
+  constructor() {
+    this.ctx = null;
+  }
+
+  ensureContext() {
+    if (!this.ctx) {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (AudioContext) {
+        this.ctx = new AudioContext();
+      }
+    }
+    if (this.ctx && this.ctx.state === 'suspended') {
+      this.ctx.resume();
+    }
+  }
+
+  playWhoosh() {
+    try {
+      this.ensureContext();
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(380, this.ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(120, this.ctx.currentTime + 0.22);
+      gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.22);
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start();
+      osc.stop(this.ctx.currentTime + 0.24);
+    } catch (_) {}
+  }
+
+  playCanHit() {
+    try {
+      this.ensureContext();
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(820, this.ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(260, this.ctx.currentTime + 0.18);
+      gain.gain.setValueAtTime(0.45, this.ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.18);
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start();
+      osc.stop(this.ctx.currentTime + 0.2);
+    } catch (_) {}
+  }
+
+  playCheer() {
+    try {
+      this.ensureContext();
+      if (!this.ctx) return;
+      const notes = [440, 554, 659, 880];
+      notes.forEach((freq, idx) => {
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(freq, this.ctx.currentTime + idx * 0.08);
+        gain.gain.setValueAtTime(0.2, this.ctx.currentTime + idx * 0.08);
+        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + idx * 0.08 + 0.3);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(this.ctx.currentTime + idx * 0.08);
+        osc.stop(this.ctx.currentTime + idx * 0.08 + 0.32);
+      });
+    } catch (_) {}
+  }
+}
 
 function createBaseballTexture() {
   const canvas = document.createElement('canvas');
@@ -54,29 +152,25 @@ function createBaseballTexture() {
   canvas.height = 256;
   const ctx = canvas.getContext('2d');
 
-  // Base off-white leather background
-  ctx.fillStyle = '#f6f3eb';
+  ctx.fillStyle = '#f7f4ec';
   ctx.fillRect(0, 0, 512, 256);
 
-  // Red stitching curves
   ctx.strokeStyle = '#c62828';
-  ctx.lineWidth = 5;
-
+  ctx.lineWidth = 6;
   ctx.beginPath();
-  for (let x = 0; x < 512; x += 4) {
-    const y1 = 128 + Math.sin((x / 512) * Math.PI * 2) * 52;
-    if (x === 0) ctx.moveTo(x, y1);
-    else ctx.lineTo(x, y1);
+  for (let x = 0; x <= 512; x += 4) {
+    const y = 128 + Math.sin((x / 512) * Math.PI * 2) * 54;
+    if (x === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
   }
   ctx.stroke();
 
-  // Stitch tick marks
   ctx.lineWidth = 3;
-  for (let x = 0; x < 512; x += 16) {
-    const y = 128 + Math.sin((x / 512) * Math.PI * 2) * 52;
+  for (let x = 0; x <= 512; x += 18) {
+    const y = 128 + Math.sin((x / 512) * Math.PI * 2) * 54;
     ctx.beginPath();
-    ctx.moveTo(x - 4, y - 8);
-    ctx.lineTo(x + 4, y + 8);
+    ctx.moveTo(x - 5, y - 9);
+    ctx.lineTo(x + 5, y + 9);
     ctx.stroke();
   }
 
@@ -85,11 +179,47 @@ function createBaseballTexture() {
   return texture;
 }
 
+function createCanTexture(colorHex, pointsLabel) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = colorHex;
+  ctx.fillRect(0, 0, 256, 256);
+
+  // Metallic top and bottom borders
+  ctx.fillStyle = '#e0e0e0';
+  ctx.fillRect(0, 0, 256, 28);
+  ctx.fillRect(0, 228, 256, 28);
+
+  // White label badge
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(128, 128, 62, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = '#212121';
+  ctx.lineWidth = 4;
+  ctx.stroke();
+
+  // Points text
+  ctx.fillStyle = '#d32f2f';
+  ctx.font = 'bold 44px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(pointsLabel, 128, 128);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
 class ConfettiSystem extends THREE.Group {
-  constructor(count = 80) {
+  constructor(count = 70) {
     super();
     this.particles = [];
-    const geom = new THREE.PlaneGeometry(0.026, 0.026);
+    const geom = new THREE.PlaneGeometry(0.025, 0.025);
     const colors = [0xff3b30, 0xffcc00, 0x34c759, 0x007aff, 0xff9500, 0xaf52de];
 
     for (let i = 0; i < count; i++) {
@@ -115,9 +245,9 @@ class ConfettiSystem extends THREE.Group {
       p.mesh.position.copy(origin);
       p.mesh.visible = true;
       p.vel.set(
-        (Math.random() - 0.5) * 3.2,
+        (Math.random() - 0.5) * 3.5,
         Math.random() * 2.8 + 1.2,
-        (Math.random() - 0.5) * 2.4
+        (Math.random() - 0.5) * 3.0
       );
       p.rotVel.set(
         Math.random() * 12,
@@ -125,7 +255,7 @@ class ConfettiSystem extends THREE.Group {
         Math.random() * 12
       );
       p.life = 0;
-      p.maxLife = 1.6 + Math.random() * 0.9;
+      p.maxLife = 1.6 + Math.random() * 0.8;
     }
   }
 
@@ -137,106 +267,11 @@ class ConfettiSystem extends THREE.Group {
         p.mesh.visible = false;
         continue;
       }
-      p.vel.y += GRAVITY * 0.45 * dt;
+      p.vel.y -= 7.5 * dt;
       p.mesh.position.addScaledVector(p.vel, dt);
       p.mesh.rotation.x += p.rotVel.x * dt;
       p.mesh.rotation.y += p.rotVel.y * dt;
       p.mesh.scale.setScalar(Math.max(0.01, 1 - p.life / p.maxLife));
-    }
-  }
-}
-
-class CarnivalCan {
-  constructor(initialPos, colorHex, points) {
-    this.initialPos = initialPos.clone();
-    this.points = points;
-    this.isKnocked = false;
-
-    this.pos = initialPos.clone();
-    this.vel = new THREE.Vector3();
-    this.rot = new THREE.Euler();
-    this.angVel = new THREE.Vector3();
-
-    // Visual Mesh Cylinder
-    const canGeom = new THREE.CylinderGeometry(CAN_RADIUS, CAN_RADIUS, CAN_HEIGHT, 24);
-    const canMat = new THREE.MeshStandardMaterial({
-      color: colorHex,
-      metalness: 0.68,
-      roughness: 0.28,
-    });
-    this.mesh = new THREE.Mesh(canGeom, canMat);
-    this.mesh.castShadow = true;
-    this.mesh.receiveShadow = true;
-
-    // Metallic rim collars
-    const rimGeom = new THREE.TorusGeometry(CAN_RADIUS, 0.005, 8, 24);
-    const rimMat = new THREE.MeshStandardMaterial({
-      color: 0xeeeeee,
-      metalness: 0.88,
-      roughness: 0.2,
-    });
-    const topRim = new THREE.Mesh(rimGeom, rimMat);
-    topRim.rotation.x = Math.PI / 2;
-    topRim.position.y = CAN_HEIGHT / 2;
-    const bottomRim = topRim.clone();
-    bottomRim.position.y = -CAN_HEIGHT / 2;
-    this.mesh.add(topRim, bottomRim);
-
-    this.updateTransform();
-  }
-
-  reset() {
-    this.pos.copy(this.initialPos);
-    this.vel.set(0, 0, 0);
-    this.rot.set(0, 0, 0);
-    this.angVel.set(0, 0, 0);
-    this.isKnocked = false;
-    this.updateTransform();
-  }
-
-  updateTransform() {
-    this.mesh.position.copy(this.pos);
-    this.mesh.rotation.copy(this.rot);
-  }
-
-  update(dt) {
-    // Check if knocked over (tilted significantly or fallen below table plane)
-    const tilt = Math.abs(Math.sin(this.rot.x)) + Math.abs(Math.sin(this.rot.z));
-    const fellBelowTable = this.pos.y < this.initialPos.y - 0.06;
-    if (!this.isKnocked && (tilt > 0.46 || fellBelowTable)) {
-      this.isKnocked = true;
-    }
-
-    if (this.vel.lengthSq() > 0.0001 || this.angVel.lengthSq() > 0.0001 || this.pos.y > 0.05) {
-      this.vel.y += GRAVITY * dt;
-      this.pos.addScaledVector(this.vel, dt);
-
-      this.rot.x += this.angVel.x * dt;
-      this.rot.y += this.angVel.y * dt;
-      this.rot.z += this.angVel.z * dt;
-
-      // Collisions against counter table and floor
-      const floorY = 0.08;
-      const onTable =
-        this.pos.z > TABLE_Z - 0.42 &&
-        this.pos.z < TABLE_Z + 0.42 &&
-        Math.abs(this.pos.x) < 0.78;
-
-      const surfaceY = onTable && this.pos.y > TABLE_Y ? TABLE_Y + CAN_HEIGHT / 2 : floorY;
-
-      if (this.pos.y < surfaceY) {
-        this.pos.y = surfaceY;
-        this.vel.y = -this.vel.y * 0.3;
-        this.vel.x *= 0.76;
-        this.vel.z *= 0.76;
-        this.angVel.multiplyScalar(0.72);
-      }
-
-      // Air and rotation damping
-      this.vel.multiplyScalar(0.984);
-      this.angVel.multiplyScalar(0.96);
-
-      this.updateTransform();
     }
   }
 }
@@ -247,295 +282,435 @@ class CarnivalGameScene extends xb.Script {
     this.score = 0;
     this.ballsRemaining = INITIAL_BALLS;
     this.knockedCount = 0;
-    this.cans = [];
-    this.activeBalls = [];
+    this.pitchPower = 5.5;
 
-    // Interactive grab velocity estimator
-    this.isGrabbingBall = false;
-    this.grabHandPositionHistory = [];
-    this.pitchPower = 5.2;
-
+    this.audio = new CarnivalAudio();
     this.baseballTexture = createBaseballTexture();
+
+    this.cans = [];
+    this.balls = [];
+    this.controllers = [];
+    this.lastControllerPositions = new Map();
+
+    // Grabbing state
+    this.isGrabbingInteractiveBall = false;
+    this.grabbedController = null;
+    this.isMouseDown = false;
+    this.dragStartPos = new THREE.Vector2();
+
+    this.initPhysics();
+  }
+
+  initPhysics() {
+    this.world = new CANNON.World();
+    this.world.gravity.set(0, -9.82, 0);
+    this.world.broadphase = new CANNON.NaiveBroadphase();
+    this.world.solver.iterations = 12;
+
+    const defaultMat = new CANNON.Material('default');
+    const contactMat = new CANNON.ContactMaterial(defaultMat, defaultMat, {
+      friction: 0.42,
+      restitution: 0.32,
+    });
+    this.world.addContactMaterial(contactMat);
+    this.world.defaultContactMaterial = contactMat;
   }
 
   init() {
     this.setupLighting();
     this.setupCarnivalBooth();
-    this.setupCans();
+    this.setupCanPyramid();
     this.setupBallStand();
+    this.setupHandsAndControllers();
     this.setupSpatialUI();
+    this.setupDesktopControls();
 
-    this.confetti = new ConfettiSystem(85);
+    this.confetti = new ConfettiSystem(80);
     this.add(this.confetti);
-
-    this.xb = { pointerEvents: 'auto' };
   }
 
   setupLighting() {
-    const hemiLight = new THREE.HemisphereLight(0xfff5e6, 0x3e2723, 2.5);
-    this.add(hemiLight);
+    const hemi = new THREE.HemisphereLight(0xfff7e6, 0x422a1d, 2.6);
+    this.add(hemi);
 
-    const dirLight = new THREE.DirectionalLight(0xfffaf0, 2.8);
-    dirLight.position.set(1.5, 4.0, 1.2);
-    dirLight.castShadow = true;
-    this.add(dirLight);
+    const dir = new THREE.DirectionalLight(0xfff5e6, 2.5);
+    dir.position.set(2.0, 4.2, 1.5);
+    dir.castShadow = true;
+    this.add(dir);
 
-    // Festive lanterns
-    const bulbLeft = new THREE.PointLight(0xffb74d, 1.9, 4.5);
-    bulbLeft.position.set(-0.78, 2.05, TABLE_Z + 0.2);
-    const bulbRight = new THREE.PointLight(0xffb74d, 1.9, 4.5);
-    bulbRight.position.set(0.78, 2.05, TABLE_Z + 0.2);
-    this.add(bulbLeft, bulbRight);
+    // Warm booth lamps
+    const leftLamp = new THREE.PointLight(0xffb74d, 2.0, 5.0);
+    leftLamp.position.set(-0.8, 2.2, TABLE_Z + 0.3);
+    const rightLamp = new THREE.PointLight(0xffb74d, 2.0, 5.0);
+    rightLamp.position.set(0.8, 2.2, TABLE_Z + 0.3);
+    this.add(leftLamp, rightLamp);
   }
 
   setupCarnivalBooth() {
     this.boothGroup = new THREE.Group();
 
-    // Wood Counter Table
-    const tableGeom = new THREE.BoxGeometry(1.65, 0.08, 0.85);
+    // Wood counter table
+    const tableGeom = new THREE.BoxGeometry(1.7, 0.1, 0.9);
     const tableMat = new THREE.MeshStandardMaterial({
       color: 0x5d4037,
-      roughness: 0.72,
+      roughness: 0.65,
       metalness: 0.1,
     });
-    const table = new THREE.Mesh(tableGeom, tableMat);
-    table.position.set(0, TABLE_Y, TABLE_Z);
-    table.receiveShadow = true;
-    this.boothGroup.add(table);
+    const tableMesh = new THREE.Mesh(tableGeom, tableMat);
+    tableMesh.position.set(0, TABLE_Y - 0.05, TABLE_Z);
+    tableMesh.receiveShadow = true;
+    this.boothGroup.add(tableMesh);
+
+    // Physical static counter surface
+    const tableBody = new CANNON.Body({ mass: 0 });
+    tableBody.addShape(new CANNON.Box(new CANNON.Vec3(0.85, 0.05, 0.45)));
+    tableBody.position.set(0, TABLE_Y - 0.05, TABLE_Z);
+    this.world.addBody(tableBody);
 
     // Table legs
-    const legGeom = new THREE.CylinderGeometry(0.042, 0.042, TABLE_Y, 12);
-    const legMat = new THREE.MeshStandardMaterial({ color: 0x3e2723, roughness: 0.8 });
-    const legOffsets = [
-      [-0.72, TABLE_Y / 2, TABLE_Z - 0.32],
-      [0.72, TABLE_Y / 2, TABLE_Z - 0.32],
-      [-0.72, TABLE_Y / 2, TABLE_Z + 0.32],
-      [0.72, TABLE_Y / 2, TABLE_Z + 0.32],
+    const legGeom = new THREE.CylinderGeometry(0.04, 0.04, TABLE_Y - 0.1, 16);
+    const legMat = new THREE.MeshStandardMaterial({ color: 0x3e2723 });
+    const legCoords = [
+      [-0.75, (TABLE_Y - 0.1) / 2, TABLE_Z - 0.35],
+      [0.75, (TABLE_Y - 0.1) / 2, TABLE_Z - 0.35],
+      [-0.75, (TABLE_Y - 0.1) / 2, TABLE_Z + 0.35],
+      [0.75, (TABLE_Y - 0.1) / 2, TABLE_Z + 0.35],
     ];
-    for (const [lx, ly, lz] of legOffsets) {
+    for (const [lx, ly, lz] of legCoords) {
       const leg = new THREE.Mesh(legGeom, legMat);
       leg.position.set(lx, ly, lz);
       this.boothGroup.add(leg);
     }
 
-    // Carnival Booth Backdrop Wall
-    const backWallGeom = new THREE.BoxGeometry(2.3, 2.3, 0.06);
-    const backWallMat = new THREE.MeshStandardMaterial({
+    // Booth backdrop backboard
+    const backGeom = new THREE.BoxGeometry(2.2, 2.2, 0.08);
+    const backMat = new THREE.MeshStandardMaterial({
       color: 0x1a237e,
-      roughness: 0.65,
+      roughness: 0.7,
     });
-    const backWall = new THREE.Mesh(backWallGeom, backWallMat);
-    backWall.position.set(0, 1.35, TABLE_Z - 0.44);
-    this.boothGroup.add(backWall);
+    const backMesh = new THREE.Mesh(backGeom, backMat);
+    backMesh.position.set(0, 1.45, TABLE_Z - 0.45);
+    this.boothGroup.add(backMesh);
 
-    // Striped Canopy Awning at the top
-    const awningGroup = new THREE.Group();
-    const stripeCount = 9;
-    const stripeWidth = 2.3 / stripeCount;
-    for (let i = 0; i < stripeCount; i++) {
-      const stripeGeom = new THREE.BoxGeometry(stripeWidth, 0.04, 0.72);
+    const backBody = new CANNON.Body({ mass: 0 });
+    backBody.addShape(new CANNON.Box(new CANNON.Vec3(1.1, 1.1, 0.04)));
+    backBody.position.set(0, 1.45, TABLE_Z - 0.45);
+    this.world.addBody(backBody);
+
+    // Side guards to keep cans contained on table
+    const sideGeom = new THREE.BoxGeometry(0.06, 0.3, 0.85);
+    const sideMat = new THREE.MeshStandardMaterial({ color: 0x4e342e });
+    const leftSide = new THREE.Mesh(sideGeom, sideMat);
+    leftSide.position.set(-0.82, TABLE_Y + 0.15, TABLE_Z);
+    const rightSide = new THREE.Mesh(sideGeom, sideMat);
+    rightSide.position.set(0.82, TABLE_Y + 0.15, TABLE_Z);
+    this.boothGroup.add(leftSide, rightSide);
+
+    // Floor physics plane
+    const floorBody = new CANNON.Body({ mass: 0 });
+    floorBody.addShape(new CANNON.Plane());
+    floorBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+    floorBody.position.set(0, 0, 0);
+    this.world.addBody(floorBody);
+
+    // Striped Awning canopy
+    const awning = new THREE.Group();
+    const stripes = 9;
+    const stripeW = 2.2 / stripes;
+    for (let i = 0; i < stripes; i++) {
+      const sGeom = new THREE.BoxGeometry(stripeW, 0.04, 0.7);
       const isRed = i % 2 === 0;
-      const stripeMat = new THREE.MeshStandardMaterial({
+      const sMat = new THREE.MeshStandardMaterial({
         color: isRed ? 0xd32f2f : 0xffffff,
-        roughness: 0.45,
+        roughness: 0.5,
       });
-      const stripe = new THREE.Mesh(stripeGeom, stripeMat);
-      stripe.position.set(-1.15 + stripeWidth * (i + 0.5), 0, 0);
-      awningGroup.add(stripe);
+      const sMesh = new THREE.Mesh(sGeom, sMat);
+      sMesh.position.set(-1.1 + stripeW * (i + 0.5), 0, 0);
+      awning.add(sMesh);
     }
-    awningGroup.position.set(0, 2.4, TABLE_Z - 0.1);
-    awningGroup.rotation.x = 0.25;
-    this.boothGroup.add(awningGroup);
-
-    // Brass Side Pillars
-    const poleGeom = new THREE.CylinderGeometry(0.03, 0.03, 2.4, 16);
-    const poleMat = new THREE.MeshStandardMaterial({
-      color: 0xffb300,
-      metalness: 0.8,
-      roughness: 0.3,
-    });
-    const leftPole = new THREE.Mesh(poleGeom, poleMat);
-    leftPole.position.set(-1.1, 1.2, TABLE_Z - 0.05);
-    const rightPole = new THREE.Mesh(poleGeom, poleMat);
-    rightPole.position.set(1.1, 1.2, TABLE_Z - 0.05);
-    this.boothGroup.add(leftPole, rightPole);
+    awning.position.set(0, 2.5, TABLE_Z - 0.15);
+    awning.rotation.x = 0.28;
+    this.boothGroup.add(awning);
 
     this.add(this.boothGroup);
   }
 
-  setupCans() {
-    // 6-can pyramid stack (3 bottom, 2 middle, 1 top)
-    const pyramidCansConfig = [
-      // Bottom row (3 cans) - 100 points each
-      { x: -0.15, y: TABLE_Y + CAN_HEIGHT / 2 + 0.04, z: TABLE_Z, color: 0xe53935, pts: 100 },
-      { x: 0.0,   y: TABLE_Y + CAN_HEIGHT / 2 + 0.04, z: TABLE_Z, color: 0x1e88e5, pts: 100 },
-      { x: 0.15,  y: TABLE_Y + CAN_HEIGHT / 2 + 0.04, z: TABLE_Z, color: 0x43a047, pts: 100 },
-      // Middle row (2 cans) - 200 points each
-      { x: -0.075, y: TABLE_Y + CAN_HEIGHT * 1.5 + 0.04, z: TABLE_Z, color: 0xfb8c00, pts: 200 },
-      { x: 0.075,  y: TABLE_Y + CAN_HEIGHT * 1.5 + 0.04, z: TABLE_Z, color: 0x8e24aa, pts: 200 },
-      // Top row (1 can) - 500 points
-      { x: 0.0,    y: TABLE_Y + CAN_HEIGHT * 2.5 + 0.04, z: TABLE_Z, color: 0xfdd835, pts: 500 },
+  setupCanPyramid() {
+    const pyramidLayout = [
+      // Bottom Row (3 cans) - 100 points
+      { x: -0.13, y: TABLE_Y + CAN_HEIGHT / 2 + 0.005, z: TABLE_Z, color: '#e53935', label: '100', pts: 100 },
+      { x: 0.0,   y: TABLE_Y + CAN_HEIGHT / 2 + 0.005, z: TABLE_Z, color: '#1e88e5', label: '100', pts: 100 },
+      { x: 0.13,  y: TABLE_Y + CAN_HEIGHT / 2 + 0.005, z: TABLE_Z, color: '#43a047', label: '100', pts: 100 },
+      // Middle Row (2 cans) - 200 points
+      { x: -0.065, y: TABLE_Y + CAN_HEIGHT * 1.5 + 0.015, z: TABLE_Z, color: '#fb8c00', label: '200', pts: 200 },
+      { x: 0.065,  y: TABLE_Y + CAN_HEIGHT * 1.5 + 0.015, z: TABLE_Z, color: '#8e24aa', label: '200', pts: 200 },
+      // Top Row (1 can) - 500 points
+      { x: 0.0,    y: TABLE_Y + CAN_HEIGHT * 2.5 + 0.025, z: TABLE_Z, color: '#fbc02d', label: '500', pts: 500 },
     ];
 
-    for (const cfg of pyramidCansConfig) {
-      const can = new CarnivalCan(
-        new THREE.Vector3(cfg.x, cfg.y, cfg.z),
-        cfg.color,
-        cfg.pts
-      );
-      this.cans.push(can);
-      this.add(can.mesh);
+    const canGeom = new THREE.CylinderGeometry(CAN_RADIUS, CAN_RADIUS, CAN_HEIGHT, 24);
+
+    for (const cfg of pyramidLayout) {
+      const tex = createCanTexture(cfg.color, cfg.label);
+      const canMat = new THREE.MeshStandardMaterial({
+        map: tex,
+        metalness: 0.55,
+        roughness: 0.35,
+      });
+      const mesh = new THREE.Mesh(canGeom, canMat);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      this.add(mesh);
+
+      // Stable rigid body using box bounds for perfect initial stacking balance
+      const body = new CANNON.Body({
+        mass: 0.35,
+        position: new CANNON.Vec3(cfg.x, cfg.y, cfg.z),
+      });
+      body.addShape(new CANNON.Box(new CANNON.Vec3(CAN_RADIUS * 0.9, CAN_HEIGHT / 2, CAN_RADIUS * 0.9)));
+      body.linearDamping = 0.25;
+      body.angularDamping = 0.3;
+
+      this.world.addBody(body);
+
+      this.cans.push({
+        mesh,
+        body,
+        initialPos: new CANNON.Vec3(cfg.x, cfg.y, cfg.z),
+        points: cfg.pts,
+        isKnocked: false,
+      });
     }
+
+    this.syncCansTransforms();
   }
 
   setupBallStand() {
-    // Pedestal placed in front of player
-    const standGeom = new THREE.CylinderGeometry(0.18, 0.22, 0.95, 24);
+    const standGeom = new THREE.CylinderGeometry(0.16, 0.2, 0.95, 24);
     const standMat = new THREE.MeshStandardMaterial({
       color: 0x37474f,
-      roughness: 0.5,
-      metalness: 0.3,
+      roughness: 0.6,
+      metalness: 0.2,
     });
     this.stand = new THREE.Mesh(standGeom, standMat);
-    this.stand.position.set(0, 0.475, -0.75);
+    this.stand.position.set(STAND_POS.x, STAND_POS.y / 2, STAND_POS.z);
     this.add(this.stand);
 
     // Interactive baseball on pedestal
     const ballGeom = new THREE.SphereGeometry(BALL_RADIUS, 24, 24);
     const ballMat = new THREE.MeshStandardMaterial({
       map: this.baseballTexture,
-      roughness: 0.4,
+      roughness: 0.38,
       metalness: 0.1,
     });
     this.interactiveBall = new THREE.Mesh(ballGeom, ballMat);
-    this.interactiveBall.position.set(0, 0.95 + BALL_RADIUS + 0.02, -0.75);
-    this.interactiveBall.name = 'Interactive Carnival Baseball';
+    this.interactiveBall.position.copy(STAND_POS);
+    this.interactiveBall.position.y += BALL_RADIUS + 0.02;
+    this.interactiveBall.castShadow = true;
 
-    // Enable manipulation and direct pointer interactions
-    this.interactiveBall.xb = {
-      manipulation: true,
-      pointerEvents: 'auto',
-      reticleMode: 'auto',
-    };
-
-    this.interactiveBall.onObjectSelectStart = (event) => this.onBallGrabStart(event);
-    this.interactiveBall.onObjectManipulate = (event) => this.onBallManipulate(event);
-    this.interactiveBall.onObjectSelectEnd = (event) => this.onBallGrabEnd(event);
-    this.interactiveBall.onObjectTouchStart = (event) => this.onBallGrabStart(event);
-    this.interactiveBall.onObjectTouchEnd = (event) => this.onBallGrabEnd(event);
+    // Glowing target ring around ball to indicate grabability
+    const ringGeom = new THREE.RingGeometry(BALL_RADIUS + 0.015, BALL_RADIUS + 0.032, 32);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0x00e5ff,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.75,
+    });
+    this.grabRing = new THREE.Mesh(ringGeom, ringMat);
+    this.grabRing.rotation.x = -Math.PI / 2;
+    this.grabRing.position.y = -BALL_RADIUS * 0.5;
+    this.interactiveBall.add(this.grabRing);
 
     this.add(this.interactiveBall);
   }
 
-  onBallGrabStart(event) {
+  setupHandsAndControllers() {
+    this.handVisuals = [];
+    const controllerColors = [0x29b6f6, 0xab47bc];
+
+    for (let i = 0; i < 2; i++) {
+      const group = new THREE.Group();
+      group.name = `ControllerHand_${i}`;
+      group.visible = false;
+
+      // Stylized glove palm / controller body
+      const palmGeom = new THREE.BoxGeometry(0.065, 0.035, 0.11);
+      const palmMat = new THREE.MeshStandardMaterial({
+        color: controllerColors[i],
+        roughness: 0.4,
+        metalness: 0.3,
+      });
+      const palm = new THREE.Mesh(palmGeom, palmMat);
+      group.add(palm);
+
+      // Grip sphere
+      const gripGeom = new THREE.SphereGeometry(0.028, 16, 16);
+      const gripMat = new THREE.MeshStandardMaterial({ color: 0x263238 });
+      const grip = new THREE.Mesh(gripGeom, gripMat);
+      grip.position.set(0, -0.02, 0.02);
+      group.add(grip);
+
+      // Forward pointing laser reticle ray
+      const rayGeom = new THREE.CylinderGeometry(0.002, 0.002, 0.7, 8);
+      const rayMat = new THREE.MeshBasicMaterial({
+        color: 0x00e5ff,
+        transparent: true,
+        opacity: 0.65,
+      });
+      const ray = new THREE.Mesh(rayGeom, rayMat);
+      ray.rotation.x = -Math.PI / 2;
+      ray.position.set(0, 0, -0.35);
+      group.add(ray);
+
+      this.add(group);
+      this.handVisuals.push({ group, ray, color: controllerColors[i] });
+    }
+  }
+
+  setupDesktopControls() {
+    window.addEventListener('mousedown', (e) => this.onPointerDown(e));
+    window.addEventListener('mousemove', (e) => this.onPointerMove(e));
+    window.addEventListener('mouseup', (e) => this.onPointerUp(e));
+    window.addEventListener('touchstart', (e) => this.onTouchStart(e), { passive: false });
+    window.addEventListener('touchmove', (e) => this.onTouchMove(e), { passive: false });
+    window.addEventListener('touchend', (e) => this.onTouchEnd(e), { passive: false });
+  }
+
+  onPointerDown(event) {
+    if (event.target.tagName === 'BUTTON' || event.target.closest('button')) return;
+    this.isMouseDown = true;
+    this.dragStartPos.set(event.clientX, event.clientY);
+    this.dragStartTime = performance.now();
+  }
+
+  onPointerMove(event) {
+    if (!this.isMouseDown) return;
+    const dy = event.clientY - this.dragStartPos.y;
+    // Animate interactive ball slightly during drag
+    this.interactiveBall.position.y = STAND_POS.y + BALL_RADIUS + 0.02 - dy * 0.0006;
+  }
+
+  onPointerUp(event) {
+    if (!this.isMouseDown) return;
+    this.isMouseDown = false;
+
+    const dx = event.clientX - this.dragStartPos.x;
+    const dy = event.clientY - this.dragStartPos.y;
+    const dt = Math.max(16, performance.now() - this.dragStartTime);
+
+    // If dragged upward/forward or clicked, pitch the ball!
+    const flingStrength = Math.hypot(dx, dy);
+    let pitchVelocity;
+
+    if (flingStrength > 30 && dy < 0) {
+      // Swiped upward: fling in direction of swipe
+      const vx = (dx / dt) * 1.8;
+      const vy = Math.min(8.5, Math.max(2.2, (-dy / dt) * 2.6));
+      const vz = -Math.min(9.5, Math.max(3.5, (flingStrength / dt) * 3.2));
+      pitchVelocity = new THREE.Vector3(vx, vy, vz);
+    } else {
+      // Direct pitch forward towards target center
+      const targetX = (event.clientX / window.innerWidth - 0.5) * 0.6;
+      pitchVelocity = new THREE.Vector3(targetX * 3.5, 3.2, -5.8);
+    }
+
+    this.pitchBallWithVelocity(pitchVelocity);
+    this.interactiveBall.position.copy(STAND_POS);
+    this.interactiveBall.position.y += BALL_RADIUS + 0.02;
+  }
+
+  onTouchStart(e) {
+    if (e.touches.length > 0) {
+      this.onPointerDown(e.touches[0]);
+    }
+  }
+
+  onTouchMove(e) {
+    if (e.touches.length > 0) {
+      this.onPointerMove(e.touches[0]);
+    }
+  }
+
+  onTouchEnd(e) {
+    if (e.changedTouches.length > 0) {
+      this.onPointerUp(e.changedTouches[0]);
+    }
+  }
+
+  pitchBallWithVelocity(velocity) {
     if (this.ballsRemaining <= 0) return;
-    this.isGrabbingBall = true;
-    this.grabHandPositionHistory = [];
-    event.stopPropagation();
-  }
 
-  onBallManipulate(event) {
-    if (!this.isGrabbingBall) return;
-    const currentPos = this.interactiveBall.position.clone();
-    const now = performance.now();
-    this.grabHandPositionHistory.push({ pos: currentPos, time: now });
+    this.ballsRemaining--;
+    this.updateUI();
+    this.audio.playWhoosh();
 
-    // Retain only last 120ms to measure release impulse
-    while (
-      this.grabHandPositionHistory.length > 2 &&
-      now - this.grabHandPositionHistory[0].time > 120
-    ) {
-      this.grabHandPositionHistory.shift();
-    }
-  }
+    const spawnPos = new THREE.Vector3(
+      this.interactiveBall.position.x,
+      this.interactiveBall.position.y + 0.08,
+      this.interactiveBall.position.z
+    );
 
-  onBallGrabEnd(event) {
-    if (!this.isGrabbingBall) return;
-    this.isGrabbingBall = false;
+    const ballMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(BALL_RADIUS, 24, 24),
+      new THREE.MeshStandardMaterial({
+        map: this.baseballTexture,
+        roughness: 0.4,
+        metalness: 0.1,
+      })
+    );
+    ballMesh.castShadow = true;
+    ballMesh.position.copy(spawnPos);
+    this.add(ballMesh);
 
-    let releaseVelocity = new THREE.Vector3(0, 1.2, -4.5);
-    if (this.grabHandPositionHistory.length >= 2) {
-      const first = this.grabHandPositionHistory[0];
-      const last =
-        this.grabHandPositionHistory[this.grabHandPositionHistory.length - 1];
-      const dt = Math.max(0.016, (last.time - first.time) / 1000);
-      const delta = last.pos.clone().sub(first.pos);
-      releaseVelocity = delta.divideScalar(dt);
+    const ballBody = new CANNON.Body({
+      mass: 0.52,
+      shape: new CANNON.Sphere(BALL_RADIUS),
+      position: new CANNON.Vec3(spawnPos.x, spawnPos.y, spawnPos.z),
+    });
+    ballBody.velocity.set(velocity.x, velocity.y, velocity.z);
+    ballBody.angularVelocity.set(
+      (Math.random() - 0.5) * 20,
+      (Math.random() - 0.5) * 20,
+      (Math.random() - 0.5) * 20
+    );
 
-      releaseVelocity.multiplyScalar(1.4);
-      if (releaseVelocity.length() < 1.5) {
-        releaseVelocity.set(0, 1.2, -4.0);
+    // Collision audio on ball impact with can or table
+    ballBody.addEventListener('collide', (ev) => {
+      if (ev.body && ev.body.mass > 0) {
+        this.audio.playCanHit();
       }
-    }
+    });
 
-    const spawnPos = this.interactiveBall.position.clone();
-    this.launchBall(spawnPos, releaseVelocity);
-    this.resetInteractiveBallPosition();
-    event.stopPropagation();
-  }
-
-  resetInteractiveBallPosition() {
-    this.interactiveBall.position.set(0, 0.95 + BALL_RADIUS + 0.02, -0.75);
-    this.interactiveBall.rotation.set(0, 0, 0);
+    this.world.addBody(ballBody);
+    this.balls.push({ mesh: ballMesh, body: ballBody, aliveTime: 0 });
   }
 
   pitchTowardsCans(powerMultiplier = 1.0) {
     if (this.ballsRemaining <= 0) return;
 
+    const speed = (this.pitchPower + Math.random() * 0.4) * powerMultiplier;
     const target = new THREE.Vector3(
-      (Math.random() - 0.5) * 0.16,
-      TABLE_Y + CAN_HEIGHT + 0.06 + (Math.random() - 0.5) * 0.1,
+      (Math.random() - 0.5) * 0.18,
+      TABLE_Y + CAN_HEIGHT + 0.08,
       TABLE_Z
     );
-    const startPos = new THREE.Vector3(0, 1.35, -0.6);
+    const start = new THREE.Vector3(0, 1.35, -0.65);
+    const delta = target.clone().sub(start);
+    const time = delta.length() / speed;
 
-    const delta = target.clone().sub(startPos);
-    const distance = delta.length();
-    const speed = (this.pitchPower + Math.random() * 0.6) * powerMultiplier;
-    const travelTime = distance / speed;
+    const vel = delta.divideScalar(time);
+    vel.y += 0.5 * 9.82 * time;
 
-    const velocity = delta.divideScalar(travelTime);
-    velocity.y += -0.5 * GRAVITY * travelTime;
-
-    this.launchBall(startPos, velocity);
-  }
-
-  launchBall(startPos, velocity) {
-    if (this.ballsRemaining <= 0) return;
-
-    this.ballsRemaining--;
-    this.updateUI();
-
-    const geom = new THREE.SphereGeometry(BALL_RADIUS, 20, 20);
-    const mat = new THREE.MeshStandardMaterial({
-      map: this.baseballTexture,
-      roughness: 0.4,
-      metalness: 0.1,
-    });
-    const mesh = new THREE.Mesh(geom, mat);
-    mesh.position.copy(startPos);
-    mesh.castShadow = true;
-    this.add(mesh);
-
-    this.activeBalls.push({
-      mesh,
-      vel: velocity.clone(),
-      spin: new THREE.Vector3(
-        (Math.random() - 0.5) * 15,
-        (Math.random() - 0.5) * 15,
-        (Math.random() - 0.5) * 15
-      ),
-      aliveTime: 0,
-    });
+    this.pitchBallWithVelocity(vel);
   }
 
   setupSpatialUI() {
     this.scoreText = new xb.UIText({
       text: 'SCORE: 0',
       style: {
-        fontSize: 28,
+        fontSize: 30,
         fontWeight: 'bold',
-        color: '#ffeb3b',
+        color: '#ffea00',
         textAlign: 'center',
       },
     });
@@ -551,10 +726,10 @@ class CarnivalGameScene extends xb.Script {
     });
 
     this.statusText = new xb.UIText({
-      text: 'Pinch & throw the ball or press Pitch!',
+      text: 'Grab & toss with VR hand, swipe mouse, or press Pitch!',
       style: {
-        fontSize: 16,
-        color: '#cfd8dc',
+        fontSize: 15,
+        color: '#b0bec5',
         textAlign: 'center',
         lineHeight: 1.3,
       },
@@ -562,11 +737,11 @@ class CarnivalGameScene extends xb.Script {
 
     this.powerSlider = new xb.UISlider({
       ariaLabel: 'Pitch Power',
-      min: 3,
-      max: 9,
+      min: 3.5,
+      max: 9.0,
       step: 0.5,
       value: this.pitchPower,
-      style: { width: '100%', height: 38 },
+      style: { width: '100%', height: 36 },
       onInput: (val) => {
         this.pitchPower = val;
       },
@@ -587,14 +762,15 @@ class CarnivalGameScene extends xb.Script {
     });
 
     this.uiCard = new xb.UICard({
-      size: { width: 0.64, height: 'auto' },
+      size: { width: 0.65, height: 'auto' },
       manipulation: true,
       edge: { scale: true },
       style: {
         flexDirection: 'column',
-        gap: 14,
+        gap: 12,
         padding: 18,
-        backgroundColor: 'rgba(18, 24, 38, 0.88)',
+        backgroundColor: 'rgba(15, 23, 42, 0.92)',
+        borderRadius: 20,
       },
       children: [
         new xb.UIText({
@@ -614,7 +790,6 @@ class CarnivalGameScene extends xb.Script {
             width: '100%',
             flexDirection: 'row',
             justifyContent: 'space-between',
-            alignItems: 'center',
             marginTop: 4,
           },
           children: [
@@ -629,7 +804,7 @@ class CarnivalGameScene extends xb.Script {
       ],
     });
 
-    this.uiCard.position.set(-0.85, 1.45, -1.25);
+    this.uiCard.position.set(-0.85, 1.45, -1.2);
     this.uiCard.rotation.y = 0.32;
     this.add(this.uiCard);
   }
@@ -639,10 +814,10 @@ class CarnivalGameScene extends xb.Script {
     this.ballsText.text = `BALLS: ${this.ballsRemaining}`;
 
     if (this.knockedCount === this.cans.length) {
-      this.statusText.text = '🎉 STRIKE! PERFECT ROUND! +500 BONUS!';
+      this.statusText.text = '🎉 STRIKE! ALL CANS DOWN! +500 PTS!';
       this.statusText.style.color = '#00e676';
     } else if (this.ballsRemaining <= 0) {
-      this.statusText.text = 'Out of balls! Hit Reset Cans to try again!';
+      this.statusText.text = 'Out of balls! Hit Reset Cans to play again!';
       this.statusText.style.color = '#ff9100';
     } else {
       this.statusText.text = `${this.knockedCount}/6 cans knocked down!`;
@@ -652,33 +827,112 @@ class CarnivalGameScene extends xb.Script {
 
   resetGame() {
     for (const can of this.cans) {
-      can.reset();
+      can.body.position.copy(can.initialPos);
+      can.body.velocity.set(0, 0, 0);
+      can.body.angularVelocity.set(0, 0, 0);
+      can.body.quaternion.set(0, 0, 0, 1);
+      can.isKnocked = false;
     }
-    for (const b of this.activeBalls) {
+    this.syncCansTransforms();
+
+    for (const b of this.balls) {
+      this.world.removeBody(b.body);
       this.remove(b.mesh);
       b.mesh.geometry.dispose();
       b.mesh.material.dispose();
     }
-    this.activeBalls = [];
+    this.balls = [];
+
     this.score = 0;
     this.ballsRemaining = INITIAL_BALLS;
     this.knockedCount = 0;
-    this.resetInteractiveBallPosition();
+    this.interactiveBall.position.copy(STAND_POS);
+    this.interactiveBall.position.y += BALL_RADIUS + 0.02;
     this.updateUI();
   }
 
-  update(dt = 0.016) {
-    super.update(dt);
-    this.confetti.update(dt);
-
-    // Update cans simulation
-    let newlyKnocked = 0;
+  syncCansTransforms() {
     for (const can of this.cans) {
-      const wasKnocked = can.isKnocked;
-      can.update(dt);
-      if (!wasKnocked && can.isKnocked) {
-        newlyKnocked++;
-        this.score += can.points;
+      can.mesh.position.copy(can.body.position);
+      can.mesh.quaternion.copy(can.body.quaternion);
+    }
+  }
+
+  updateControllers(dt) {
+    const inputControllers = xb.core.input?.controllers || [];
+
+    for (let i = 0; i < this.handVisuals.length; i++) {
+      const visual = this.handVisuals[i];
+      const controller = inputControllers[i];
+
+      if (controller && controller.visible) {
+        visual.group.visible = true;
+        visual.group.position.copy(controller.position);
+        visual.group.quaternion.copy(controller.quaternion);
+
+        // Track velocity
+        const prev = this.lastControllerPositions.get(controller) || controller.position.clone();
+        const vel = controller.position.clone().sub(prev).divideScalar(Math.max(0.001, dt));
+        this.lastControllerPositions.set(controller, controller.position.clone());
+
+        // Check grabbing interaction with the baseball on pedestal
+        const distToBall = controller.position.distanceTo(this.interactiveBall.position);
+        const isTriggerPressed = Boolean(controller.userData?.selected);
+
+        if (distToBall < 0.18 && isTriggerPressed && !this.isGrabbingInteractiveBall) {
+          this.isGrabbingInteractiveBall = true;
+          this.grabbedController = controller;
+        }
+
+        // Grabbing update
+        if (this.isGrabbingInteractiveBall && this.grabbedController === controller) {
+          this.interactiveBall.position.copy(controller.position);
+
+          // On release: throw!
+          if (!isTriggerPressed) {
+            this.isGrabbingInteractiveBall = false;
+            this.grabbedController = null;
+            let throwVel = vel.clone().multiplyScalar(1.5);
+            if (throwVel.length() < 1.5) {
+              throwVel = new THREE.Vector3(0, 2.8, -5.5);
+            }
+            this.pitchBallWithVelocity(throwVel);
+            this.interactiveBall.position.copy(STAND_POS);
+            this.interactiveBall.position.y += BALL_RADIUS + 0.02;
+          }
+        }
+      } else {
+        visual.group.visible = false;
+      }
+    }
+  }
+
+  update() {
+    const dt = xb.getDeltaTime() || 0.016;
+
+    // Pulse grab ring
+    this.grabRing.rotation.z += 0.025;
+    this.grabRing.material.opacity = 0.55 + Math.sin(performance.now() * 0.006) * 0.25;
+
+    // Step physics world
+    this.world.step(Math.min(dt, 0.033));
+
+    // Update cans and scoring
+    this.syncCansTransforms();
+    let newlyKnocked = 0;
+
+    for (const can of this.cans) {
+      if (!can.isKnocked) {
+        // Can is considered knocked if tilted > 40 degrees or fallen below table height
+        const up = new THREE.Vector3(0, 1, 0).applyQuaternion(can.mesh.quaternion);
+        const tilt = Math.acos(Math.max(-1, Math.min(1, up.y)));
+        const fellDown = can.mesh.position.y < TABLE_Y - 0.05;
+
+        if (tilt > 0.65 || fellDown) {
+          can.isKnocked = true;
+          newlyKnocked++;
+          this.score += can.points;
+        }
       }
     }
 
@@ -688,79 +942,40 @@ class CarnivalGameScene extends xb.Script {
 
       if (this.knockedCount === this.cans.length) {
         this.score += 500;
-        this.confetti.burst(new THREE.Vector3(0, TABLE_Y + 0.4, TABLE_Z));
+        this.audio.playCheer();
+        this.confetti.burst(new THREE.Vector3(0, TABLE_Y + 0.35, TABLE_Z));
         this.updateUI();
       }
     }
 
-    // Update thrown baseballs
-    for (let i = this.activeBalls.length - 1; i >= 0; i--) {
-      const ball = this.activeBalls[i];
-      ball.aliveTime += dt;
+    // Update active thrown baseballs
+    for (let i = this.balls.length - 1; i >= 0; i--) {
+      const b = this.balls[i];
+      b.aliveTime += dt;
+      b.mesh.position.copy(b.body.position);
+      b.mesh.quaternion.copy(b.body.quaternion);
 
-      ball.vel.y += GRAVITY * dt;
-      ball.mesh.position.addScaledVector(ball.vel, dt);
-      ball.mesh.rotation.x += ball.spin.x * dt;
-      ball.mesh.rotation.y += ball.spin.y * dt;
-
-      // Ball & can cylinder collision
-      for (const can of this.cans) {
-        const diff = ball.mesh.position.clone().sub(can.pos);
-        const horizDist = Math.hypot(diff.x, diff.z);
-        const vertDist = Math.abs(diff.y);
-
-        if (horizDist < CAN_RADIUS + BALL_RADIUS && vertDist < CAN_HEIGHT / 2 + BALL_RADIUS) {
-          const normal = diff.normalize();
-          const impactSpeed = ball.vel.length();
-
-          const impulse = normal.clone().multiplyScalar(impactSpeed * 0.72);
-          can.vel.add(impulse);
-          can.angVel.add(
-            new THREE.Vector3(
-              (Math.random() - 0.5) * 8,
-              (Math.random() - 0.5) * 8,
-              (Math.random() - 0.5) * 8
-            )
-          );
-
-          ball.vel.reflect(normal).multiplyScalar(0.4);
-          ball.vel.add(new THREE.Vector3((Math.random() - 0.5) * 0.5, 0.4, 0));
-        }
-      }
-
-      // Backboard collision
-      if (ball.mesh.position.z < TABLE_Z - 0.38) {
-        ball.mesh.position.z = TABLE_Z - 0.38;
-        ball.vel.z = -ball.vel.z * 0.45;
-      }
-
-      // Floor bounce
-      if (ball.mesh.position.y < 0.06) {
-        ball.mesh.position.y = 0.06;
-        ball.vel.y = -ball.vel.y * 0.35;
-        ball.vel.x *= 0.8;
-        ball.vel.z *= 0.8;
-      }
-
-      // Despawn old balls after 4.5 seconds
-      if (ball.aliveTime > 4.5) {
-        this.remove(ball.mesh);
-        ball.mesh.geometry.dispose();
-        ball.mesh.material.dispose();
-        this.activeBalls.splice(i, 1);
+      // Despawn balls after 6 seconds
+      if (b.aliveTime > 6.0) {
+        this.world.removeBody(b.body);
+        this.remove(b.mesh);
+        b.mesh.geometry.dispose();
+        b.mesh.material.dispose();
+        this.balls.splice(i, 1);
       }
     }
+
+    this.updateControllers(dt);
+    this.confetti.update(dt);
   }
 
   dispose() {
     this.baseballTexture.dispose();
-    this.interactiveBall.geometry.dispose();
-    this.interactiveBall.material.dispose();
     for (const can of this.cans) {
       can.mesh.geometry.dispose();
       can.mesh.material.dispose();
     }
-    for (const b of this.activeBalls) {
+    for (const b of this.balls) {
       b.mesh.geometry.dispose();
       b.mesh.material.dispose();
     }
@@ -771,12 +986,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const options = new xb.Options();
   options.setAppTitle('Carnival Can Toss');
   options.setAppDescription(
-    'Knock down the stacked cans with interactive baseballs.'
+    'Step up to the carnival booth! Grab and fling baseballs to knock down the stacked cans.'
   );
   options.enableHands();
   options.enableReticles();
   options.hands.visualization = true;
   options.reticles.enabled = true;
+  options.simulator.defaultMode = xb.SimulatorMode.CONTROLLER;
+  options.xrButton.showEnterSimulatorButton = true;
 
   xb.add(new CarnivalGameScene());
   xb.init(options);
