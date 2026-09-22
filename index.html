@@ -34,20 +34,22 @@
       import * as THREE from 'three';
       import * as xb from 'xrblocks';
 
-      // Custom Curve for procedural infinite wire generation
       class WireCurve extends THREE.Curve {
-        constructor(timeOffset = 0, difficulty = 1.0) {
+        constructor(timeOffset = 0, difficulty = 1.0, safeZone = false) {
           super();
           this.timeOffset = timeOffset;
           this.difficulty = difficulty;
+          this.safeZone = safeZone;
         }
 
         getPoint(t, optionalTarget = new THREE.Vector3()) {
-          // t ranges from 0 to 1. Map this to a Z depth from +1 to -20 meters
           const z = 1.0 - t * 21.0; 
           
-          // Generate wavy patterns using sine and cosine functions.
-          // timeOffset propagates the wave towards the user.
+          if (this.safeZone && z > -1.0) {
+            // Straight flat starting alignment so loop starts perfectly centered inside the wire
+            return optionalTarget.set(0, 1.4, z);
+          }
+
           const wave1 = Math.sin(z * 0.8 + this.timeOffset * 2.0);
           const wave2 = Math.cos(z * 1.5 + this.timeOffset * 1.3);
           const wave3 = Math.sin(z * 0.4 - this.timeOffset * 1.0);
@@ -61,28 +63,29 @@
 
       class WireloopGame extends xb.Script {
         init() {
-          // Game Constants & State
           this.isPlaying = false;
+          this.safeZoneActive = true;
           this.score = 0;
           this.timeOffset = 0;
-          this.baseSpeed = 1.5;
-          this.difficulty = 0.2; // Starts easy, gets harder
+          this.baseSpeed = 1.8;
+          this.difficulty = 0.2;
           this.loopRadius = 0.12;
           this.wireRadius = 0.015;
-          
+
+          // Track grab state for dual wands (index 0 = Left/Primary, index 1 = Right)
+          this.grabbedStates = [false, false];
+
           this.setupEnvironment();
           this.setupUI();
-          this.setupWireAndLoop();
+          this.setupWandsAndWire();
         }
 
         setupEnvironment() {
-          // Ambient and directional lighting for the glowing neon feel
-          this.add(new THREE.AmbientLight(0xffffff, 0.2));
+          this.add(new THREE.AmbientLight(0xffffff, 0.3));
           const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
           dirLight.position.set(0, 5, 2);
           this.add(dirLight);
 
-          // Add a subtle floor grid for depth perception
           const grid = new THREE.GridHelper(40, 40, 0x003366, 0x001133);
           grid.position.y = 0;
           this.add(grid);
@@ -95,20 +98,20 @@
           });
 
           this.statusText = new xb.UIText({
-            text: 'Thread the ring over the wire.\nAvoid touching it!',
-            style: { fontSize: 18, color: '#aaaaaa', textAlign: 'center', lineHeight: 1.4 }
+            text: 'Grab the wand trigger/pinch to hold.\nThread it along the wire without touching!',
+            style: { fontSize: 16, color: '#aaaaaa', textAlign: 'center', lineHeight: 1.4 }
           });
 
           this.startButton = new xb.UIButton({
             label: 'START GAME',
             icon: 'play_arrow',
             onClick: () => this.startGame(),
-            style: { width: '100%', marginTop: 20, backgroundColor: '#e91e63' }
+            style: { width: '100%', marginTop: 15, backgroundColor: '#e91e63' }
           });
 
           this.uiCard = new xb.UICard({
-            size: { width: 0.6, height: 0.4 }, // Fixed height to guarantee visibility
-            manipulation: false, // Locked in place
+            size: { width: 0.6, height: 0.45 },
+            manipulation: false,
             style: { 
               flexDirection: 'column',
               justifyContent: 'center',
@@ -121,46 +124,59 @@
               borderColor: '#00ffff'
             },
             children: [
-              new xb.UIText({ text: 'WIRELOOP VR', style: { fontSize: 42, fontWeight: 'bold', color: '#ffffff', textAlign: 'center' } }),
+              new xb.UIText({ text: 'WIRELOOP VR', style: { fontSize: 40, fontWeight: 'bold', color: '#ffffff', textAlign: 'center' } }),
               this.scoreText,
               this.statusText,
               this.startButton
             ]
           });
 
-          // Position UI directly in front of the user at eye-level so the Start button is obvious
           this.uiCard.position.set(0, 1.5, -1.2);
           this.add(this.uiCard);
         }
 
-        setupWireAndLoop() {
-          // Create the Loop (attached to controller later)
+        createWandMesh() {
+          const wandGroup = new THREE.Group();
+          
           const loopGeom = new THREE.TorusGeometry(this.loopRadius, 0.008, 16, 64);
-          this.loopMat = new THREE.MeshStandardMaterial({ 
+          const loopMat = new THREE.MeshStandardMaterial({ 
             color: 0x00ffff, 
             emissive: 0x00ffff, 
             emissiveIntensity: 0.8,
             roughness: 0.2
           });
-          this.loopMesh = new THREE.Mesh(loopGeom, this.loopMat);
+          const loopMesh = new THREE.Mesh(loopGeom, loopMat);
           
-          // Add a smaller inner ring to indicate the sweet spot
           const innerLoop = new THREE.Mesh(
             new THREE.TorusGeometry(this.loopRadius - this.wireRadius, 0.002, 8, 32),
             new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.3 })
           );
-          this.loopMesh.add(innerLoop);
+          loopMesh.add(innerLoop);
 
-          // Add a Wand Handle so it looks like a physical wand controller
           const handleGeom = new THREE.CylinderGeometry(0.015, 0.015, 0.15, 16);
           const handleMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.9 });
           const handleMesh = new THREE.Mesh(handleGeom, handleMat);
-          handleMesh.position.set(0, -this.loopRadius - 0.075, 0); // Below the ring
-          this.loopMesh.add(handleMesh);
+          handleMesh.position.set(0, -this.loopRadius - 0.075, 0);
+          loopMesh.add(handleMesh);
 
-          this.add(this.loopMesh);
+          wandGroup.add(loopMesh);
+          return { group: wandGroup, material: loopMat };
+        }
 
-          // Create the initial Wire
+        setupWandsAndWire() {
+          // Create dual wands for left & right controller/hands
+          const wand1 = this.createWandMesh();
+          const wand2 = this.createWandMesh();
+
+          this.wands = [wand1, wand2];
+          this.add(wand1.group);
+          this.add(wand2.group);
+
+          // Initial positions (Left and Right sides near start zone)
+          wand1.group.position.set(-0.2, 1.4, 0.8);
+          wand2.group.position.set(0.2, 1.4, 0.8);
+
+          // Wire creation
           this.wireMat = new THREE.MeshStandardMaterial({
             color: 0xff00ff,
             emissive: 0xe91e63,
@@ -172,87 +188,106 @@
         }
 
         generateWireGeometry() {
-          const curve = new WireCurve(this.timeOffset, this.difficulty);
-          // 150 segments along the length, 8 radial segments
+          const curve = new WireCurve(this.timeOffset, this.difficulty, this.safeZoneActive);
           return new THREE.TubeGeometry(curve, 150, this.wireRadius, 8, false);
         }
 
         startGame() {
           this.isPlaying = true;
+          this.safeZoneActive = false;
           this.score = 0;
           this.timeOffset = 0;
           this.difficulty = 0.2;
           
           this.scoreText.text = 'Score: 0';
-          this.statusText.text = 'Stay centered!';
+          this.statusText.text = 'Keep the ring on the wire!';
           this.startButton.style.display = 'none';
           
-          // Reset visual materials to playing state
-          this.loopMat.color.setHex(0x00ffff);
-          this.loopMat.emissive.setHex(0x00ffff);
+          for (const w of this.wands) {
+            w.material.color.setHex(0x00ffff);
+            w.material.emissive.setHex(0x00ffff);
+          }
           this.wireMat.emissive.setHex(0xe91e63);
         }
 
         gameOver() {
           this.isPlaying = false;
           
-          this.statusText.text = 'CRASH! Game Over.';
+          this.statusText.text = 'CRASH! You touched the wire.';
           this.startButton.label = 'TRY AGAIN';
           this.startButton.icon = 'refresh';
           this.startButton.style.display = 'flex';
 
-          // Visual feedback for crash
-          this.loopMat.color.setHex(0xff0000);
-          this.loopMat.emissive.setHex(0xff0000);
+          for (const w of this.wands) {
+            w.material.color.setHex(0xff0000);
+            w.material.emissive.setHex(0xff0000);
+          }
           this.wireMat.emissive.setHex(0xff0000);
         }
 
         update(delta) {
-          // Track the primary controller (or fallback)
-          const controller = xb.core.input.controllers[0];
-          
-          if (controller) {
-            // Smoothly move the loop to the controller's position
-            this.loopMesh.position.lerp(controller.position, 0.5);
-            this.loopMesh.quaternion.slerp(controller.quaternion, 0.5);
-          } else {
-            // Default position if no controller is detected yet
-            this.loopMesh.position.set(0, 1.4, -0.5);
+          const controllers = xb.core.input.controllers;
+
+          // Update dual wands based on controller input or physics holding
+          for (let i = 0; i < 2; i++) {
+            const wandGroup = this.wands[i].group;
+            const controller = controllers[i];
+
+            if (controller) {
+              const isTriggerPressed = controller.userData?.selected || controller.userData?.squeeze || false;
+              
+              if (isTriggerPressed) {
+                this.grabbedStates[i] = true;
+              }
+
+              // If grabbed or active tracking
+              if (controller.position.lengthSq() > 0.01) {
+                wandGroup.position.lerp(controller.position, 0.4);
+                wandGroup.quaternion.slerp(controller.quaternion, 0.4);
+              }
+            } else {
+              // Desktop mouse/pose simulator fallback position for dual wands
+              if (i === 0) {
+                wandGroup.position.set(0, 1.4, this.safeZoneActive ? 0.8 : -0.5);
+              } else {
+                wandGroup.position.set(0.3, 1.2, -0.4);
+              }
+            }
           }
 
           if (this.isPlaying) {
-            // 1. Advance the game state
+            // Smoothly flow the wire toward the player
             this.timeOffset += this.baseSpeed * delta;
-            this.difficulty = Math.min(1.5, this.difficulty + delta * 0.02); // Max difficulty cap
+            this.difficulty = Math.min(1.8, this.difficulty + delta * 0.015);
             this.score += delta * 100 * this.difficulty;
             this.scoreText.text = `Score: ${Math.floor(this.score)}`;
 
-            // 2. Update Wire Geometry procedurally
             const oldGeo = this.wireMesh.geometry;
             this.wireMesh.geometry = this.generateWireGeometry();
             oldGeo.dispose();
 
-            // 3. Collision Detection
-            this.checkCollision(this.loopMesh.position);
+            // Check collision for both active wands
+            for (let i = 0; i < 2; i++) {
+              this.checkCollision(this.wands[i].group.position);
+            }
+          } else if (this.safeZoneActive) {
+            // Keep the initial wire stable in safe zone so loop rests inside it
+            const oldGeo = this.wireMesh.geometry;
+            this.wireMesh.geometry = this.generateWireGeometry();
+            oldGeo.dispose();
           }
         }
 
         checkCollision(loopPos) {
-          // We only check for collision if the loop is within the active wire Z-range
           if (loopPos.z <= 1.0 && loopPos.z >= -20.0) {
-            // Reverse engineering 't' from the curve logic: z = 1.0 - t * 21.0
             const t = (1.0 - loopPos.z) / 21.0;
-            
-            // Get the exact center of the wire at the loop's current Z depth
-            const curve = new WireCurve(this.timeOffset, this.difficulty);
+            const curve = new WireCurve(this.timeOffset, this.difficulty, this.safeZoneActive);
             const wirePoint = curve.getPoint(t);
 
-            // Calculate distance in the XY plane between loop center and wire center
             const dx = loopPos.x - wirePoint.x;
             const dy = loopPos.y - wirePoint.y;
             const distanceXY = Math.sqrt(dx * dx + dy * dy);
 
-            // If the distance is greater than the loop's inner radius minus wire radius, it's a hit.
             const tolerance = this.loopRadius - this.wireRadius;
             if (distanceXY > tolerance) {
               this.gameOver();
@@ -263,20 +298,19 @@
         dispose() {
           this.wireMesh.geometry.dispose();
           this.wireMat.dispose();
-          this.loopMesh.geometry.dispose();
-          this.loopMat.dispose();
+          for (const w of this.wands) {
+            w.group.children[0].geometry.dispose();
+            w.material.dispose();
+          }
         }
       }
 
       async function start() {
         const options = new xb.Options();
         options.setAppTitle('Infinite Wireloop');
-        options.setAppDescription('Thread the ring along an infinite, procedurally flowing wire.');
+        options.setAppDescription('Thread dual wands along an infinite flowing wire.');
         
-        // CONTROLLER mode maps desktop mouse to the controller position
         options.simulator.defaultMode = xb.SimulatorMode.CONTROLLER;
-        
-        // Explicitly enable the simulator button so you can play on desktop/in the preview!
         options.xrButton.showEnterSimulatorButton = true;
         
         xb.add(new WireloopGame());
